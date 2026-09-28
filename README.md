@@ -38,32 +38,167 @@ ROOT ENVIRONMENT
 
 ## The four hurdles
 
-### Hurdle 1 — Primary userspace shell & ownership
+## Hurdle 1 — Primary userspace shell & ownership
 
-**The problem:** `su <uid>` alone gives you a wrong-environment shell. The root shell's `PATH`, `HOME`, `PREFIX`, and `LD_LIBRARY_PATH` survive the UID switch and corrupt Termux toolchain resolution. Termux binaries can't find their libraries, `zsh` fails to init, and you're left in a broken `/system/bin/sh`.
+This was the foundational problem. Getting a shell that actually *is* Termux — right UID, right groups, right env, right toolchain — from a root session.
 
-**What previous approaches did wrong:**
-- Harvested env from `/proc/<pid>/environ` (attacker-controlled data fed into root shell construction)
-- Sourced a writable cache file as shell code (critical RCE: Termux-controlled `passwd` → cache → `. cache` as root)
-- Used `env -i $ENV_LINES` with unquoted expansion (word splitting and glob expansion on untrusted data)
-- Parsed `/etc/passwd` to find the shell (unreliable, injectable)
+### What Android actually does when Termux starts
 
-**What `txsu` does:** constructs the environment explicitly with individually-quoted assignments, never inherits root's env, never sources external data as code. The only input is `stat` output (UID/GID integers) which cannot contain shell syntax.
+When the Android framework launches Termux normally, it goes through Zygote:
 
 ```
-ROOT SHELL
-    │  env intentionally discarded
-    ▼
-su -g $TGID -G $IGID -G $SGID $TUID
-    │
-    ▼
-/system/bin/sh -c "
-    export HOME=...
-    export PREFIX=...
-    ...
-    exec zsh -l -i
-"
+Android Framework (ActivityManager)
+         │
+         │  fork request with full credential spec
+         ▼
+      Zygote
+         │
+         ├── UID  = 10172  (u0_a172)
+         ├── GID  = 10172
+         ├── supplementary groups = [ inet, sdcard_rw, ... ]
+         ├── SELinux domain = untrusted_app_27
+         ├── capabilities stripped
+         ├── secureexec
+         └── env = framework-initialized
+         │
+         ▼
+   com.termux process
+         │
+         ▼
+   Termux terminal service
+         │
+         ▼
+   pty → zsh (inside PREFIX)
 ```
+
+A root bridge has to approximate this from nothing, using only `su`.
+
+---
+
+### What the old approach did (and why it failed)
+
+```
+root shell (u:r:ksu:s0)
+      │
+      ├─► read /proc/<pid>/environ   ← ① untrusted Termux process data
+      │         │
+      │         ▼
+      │   ENV_LINES="HOME=...\nPREFIX=..."
+      │         │
+      │         ▼
+      │   /system/bin/env -i $ENV_LINES   ← ② unquoted expansion
+      │         │ word splitting / glob expansion on untrusted data
+      │         ▼
+      │   read $PREFIX/etc/passwd    ← ③ Termux-writable file
+      │         │
+      │         ▼
+      │   TERMUX_SHELL=<shell path>
+      │         │
+      │         ▼
+      │   cache_write() →  TERMUX_SHELL=${TERMUX_SHELL}  ← ④ unquoted
+      │         │
+      │         ▼
+      │   /data/adb/txsu/cache
+      │         │
+      │         ▼  . "$CACHE_FILE"   ← ⑤ sourced as root shell code  🔴 RCE
+      │
+      ├─► runcon "$SELINUX_CTX" /system/bin/true  ← ⑥ weak probe
+      │         │ proves only `true` works, not the full chain
+      │         ▼
+      │   runcon → su $UID → env -i → shell   ← ⑦ order wrong
+      │
+      └─► su "$TERMUX_UID"   ← ⑧ no GID, no supplementary groups
+```
+
+**Failures at each numbered step:**
+
+| # | Problem | Impact |
+|---|---|---|
+| ① | `/proc/<pid>/environ` is attacker-controlled data | root reads untrusted input |
+| ② | `$ENV_LINES` unquoted → word splitting + glob | `FOO=hello world` becomes two args |
+| ③ | `$PREFIX/etc/passwd` is Termux-writable | shell path can be injected |
+| ④ | Cache written unquoted | `; payload` in shell name becomes shell syntax |
+| ⑤ | Cache sourced as root code | **Critical RCE** — Termux controls what root executes |
+| ⑥ | `runcon true` proves nothing about the real chain | false confidence |
+| ⑦ | SELinux transition before UID switch | transition order matters to kernel |
+| ⑧ | No `-g`, no `-G` | missing `inet`, `sdcard_rw`, storage groups → network + storage broken |
+
+---
+
+### What `txsu` does instead
+
+The entire design is: **construct everything from verified integers, never source external data, never inherit root env.**
+
+```
+root shell (u:r:ksu:s0)
+      │
+      ├─► stat -c '%u' /data/data/com.termux   → TUID  (integer only)
+      ├─► stat -c '%g' /data/data/com.termux   → TGID  (integer only)
+      ├─► stat -c '%g' /dev/socket/dnsproxyd   → IGID  (inet group)
+      ├─► stat -c '%g' /storage                → SGID  (storage group)
+      │
+      │   ┌─────────────────────────────────────┐
+      │   │  stat output = integers only        │
+      │   │  cannot contain shell syntax        │
+      │   │  no Termux filesystem involved      │
+      │   └─────────────────────────────────────┘
+      │
+      ▼
+/system/bin/su
+    -g  $TGID          ← primary group = Termux GID
+    -G  $IGID          ← supplementary: inet  (network access)
+    -G  $SGID          ← supplementary: storage (sdcard access)
+    $TUID              ← UID switch
+    /system/bin/sh -c '
+        │
+        │  NOW INSIDE uid=10172 PROCESS
+        │  root env is GONE — sh -c starts clean
+        │
+        ├── export HOME=...          (hardcoded known path)
+        ├── export PREFIX=...        (hardcoded known path)
+        ├── export ZDOTDIR=...       (hardcoded known path)
+        ├── export PATH=PREFIX/bin:PREFIX/bin/applets:system paths
+        ├── export TMPDIR=...
+        ├── export TERM=xterm-256color
+        ├── export LANG=...
+        │
+        ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS
+        ├── export ANDROID_ART_ROOT / I18N_ROOT / TZDATA_ROOT
+        │
+        ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
+        ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
+        │
+        ├── export SHELL=$PREFIX/bin/zsh
+        ├── export EXTERNAL_STORAGE=/sdcard
+        │
+        ├── unset LD_LIBRARY_PATH    ← clear root linker state
+        ├── export LD_PRELOAD=$PREFIX/lib/libtermux-exec-ld-preload.so
+        │
+        ├── cd $HOME
+        │
+        └── exec $PREFIX/bin/zsh -l -i
+                  │
+                  │  login shell: sources .zprofile, .zshrc
+                  ▼
+              your Termux shell ✅
+    '
+```
+
+---
+
+### Why each decision was made
+
+**`stat` for UID/GID detection** — `stat -c '%u'` returns a decimal integer. Integers cannot contain shell metacharacters. This eliminates the entire class of injection bugs from using `passwd`, `dumpsys`, `pm`, or process scanning.
+
+**`-g $TGID -G $IGID -G $SGID`** — `su <uid>` alone only switches the UID. It does not reconstruct the supplementary group membership that the Android framework gives a real app process. Without `inet` (GID of `dnsproxyd` socket), network sockets are blocked. Without `storage`, `/sdcard` is inaccessible. These GIDs are also detected via `stat` — not hardcoded — so they work across all devices.
+
+**`/system/bin/sh -c '...'`** — The env is constructed inside a double-quoted heredoc-style `-c` string, with all paths baked in at the outer (root) script level. The inner shell never reads any Termux file before the `exec`. There is no cache, no sourced file, no variable inherited from root.
+
+**`unset LD_LIBRARY_PATH` before `LD_PRELOAD`** — Root shells (especially KSU/SSH sessions) may carry `LD_LIBRARY_PATH` pointing at system paths. If that survives into Termux's zsh, the dynamic linker picks up wrong `.so` files. Clearing it first ensures `libtermux-exec-ld-preload.so` operates cleanly.
+
+**`exec zsh -l -i`** — `-l` makes it a login shell (reads `.zprofile`). `-i` makes it interactive (reads `.zshrc`). Together they give you your full configured Termux environment including your custom PATH, aliases, plugins, and `sudo`/`tsu` working correctly.
+
+**No `runcon`** — the old approach used `runcon` to try to match Termux's SELinux domain. This was solving the wrong problem (see Hurdle 2). `txsu` skips it entirely. The shell runs as `u:r:ksu:s0` or `u:r:magisk:s0` and that is fine for UID-based operations.
 
 ---
 
