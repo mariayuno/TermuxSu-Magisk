@@ -219,6 +219,10 @@ detect_all() {
       u:r:*:s0:*)
         TERMUX_SELINUX_TYPE=$(echo "$_ctx" | cut -d: -f3)
         TERMUX_SELINUX_CATS=$(echo "$_ctx" | cut -d: -f5-)
+        # guard against truncated read (e.g. "utrusted_app_27" missing leading 'n')
+        case "$TERMUX_SELINUX_TYPE" in
+          utrusted_app*) TERMUX_SELINUX_TYPE="un${TERMUX_SELINUX_TYPE}" ;;
+        esac
         info "SELinux from live process $TERMUX_PID: type=$TERMUX_SELINUX_TYPE cats=$TERMUX_SELINUX_CATS"
         ;;
     esac
@@ -379,20 +383,29 @@ LD_PRELOAD=${TERMUX_LD_PRELOAD}"
 }
 
 # ── exec chain ────────────────────────────────────────────────────────────────
+# runcon on KSU (u:r:ksu:s0) cannot transition to untrusted_app — the policy
+# doesn't permit it. We probe with a no-op first; if it fails we skip it.
+# We cannot use 'exec runcon ...' directly because exec replaces the process
+# and a failed runcon has no recovery path.
 
 do_exec() {
   _bin="$1"; shift
   if command -v runcon >/dev/null 2>&1 && [ -n "$SELINUX_CTX" ]; then
-    exec runcon "$SELINUX_CTX" \
-      /system/bin/su "$TERMUX_UID" \
-      /system/bin/env -i $ENV_LINES \
-      "$_bin" "$@"
-  else
-    [ -z "$SELINUX_CTX" ] && warn "runcon unavailable — no SELinux context switch"
-    exec /system/bin/su "$TERMUX_UID" \
-      /system/bin/env -i $ENV_LINES \
-      "$_bin" "$@"
+    # probe: can we actually set this context?
+    runcon "$SELINUX_CTX" /system/bin/true 2>/dev/null
+    if [ $? -eq 0 ]; then
+      exec runcon "$SELINUX_CTX" \
+        /system/bin/su "$TERMUX_UID" \
+        /system/bin/env -i $ENV_LINES \
+        "$_bin" "$@"
+    else
+      warn "runcon cannot set $SELINUX_CTX (policy denial) — skipping context switch"
+    fi
   fi
+  # fallback: plain uid drop, no SELinux context switch
+  exec /system/bin/su "$TERMUX_UID" \
+    /system/bin/env -i $ENV_LINES \
+    "$_bin" "$@"
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
