@@ -204,21 +204,160 @@ root shell (u:r:ksu:s0)
 
 ### Hurdle 2 — Internet
 
-**The problem:** network access inside the shell was broken. Processes couldn't reach DNS or make connections.
+This was the most misdiagnosed problem. The old implementation had an entire networking subsystem built on a wrong premise, and the real fix turned out to be two lines.
 
-**The wrong diagnosis (and why it's wrong):** the old approach claimed `fwmarkd` routes based on SELinux context, and therefore you need `runcon untrusted_app_27` to get networking. This is **incorrect**.
+---
 
-From AOSP `netd` source (`FwmarkServer.cpp`): `fwmarkd` selects the network via `getNetworkForConnect(client->getUid())` — it uses the **UID**, not the SELinux domain. SELinux is relevant one layer earlier: a process needs permission to connect to `/dev/socket/fwmarkd` and `/dev/socket/dnsproxyd` at all. The `netdomain` policy grants that. KernelSU's `ksu` domain already has `netdomain` in upstream KSU — so transitioning to `untrusted_app_27` for networking is solving the wrong problem.
+#### What Android's networking stack actually does
 
-**The actual requirement:** the process must be in the **`inet` supplementary group** (the GID of `/dev/socket/dnsproxyd`). Android's network stack requires this group membership for socket access. Without it, `connect()` fails silently or DNS is unreachable.
+When any process makes a socket call, the kernel routes it through `netd` via the fwmark mechanism:
 
-**What `txsu` does:** detects the `inet` GID dynamically at runtime:
-
-```sh
-IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
+```
+process calls connect() / getaddrinfo()
+              │
+              ▼
+       ┌─────────────────────────────────────┐
+       │  Does this domain have permission   │
+       │  to reach /dev/socket/fwmarkd ?     │  ← SELinux check (netdomain)
+       │  to reach /dev/socket/dnsproxyd ?   │
+       └─────────────┬───────────────────────┘
+                     │ yes
+                     ▼
+              FwmarkServer (netd)
+                     │
+                     │  getNetworkForConnect(client->getUid())
+                     │                            ▲
+                     │                            │ UID — not SELinux domain
+                     ▼
+              NetworkController
+                     │
+                     │  selects NetId from UID/network policy
+                     │  (VPN applicability, per-UID network rules)
+                     ▼
+              correct network route + DNS
 ```
 
-and passes it via `su -G $IGID`. No SELinux domain juggling required.
+**Source:** AOSP `FwmarkServer.cpp` (android-14 tag): `getNetworkForConnect(client->getUid())` — the routing decision is UID-based. SELinux only gates whether the process can *talk to* `fwmarkd` and `dnsproxyd` at all, via the `netdomain` attribute in `net.te`.
+
+---
+
+#### What the old approach believed (and why it was wrong)
+
+The old `txsu` claimed:
+
+> `fwmarkd` routes based on the SELinux context, not just UID.
+
+And built this as the fix:
+
+```
+root shell (u:r:ksu:s0)
+      │
+      │  runcon "$SELINUX_CTX" ...    ← switch to untrusted_app_27
+      ▼
+u:r:untrusted_app_27:s0
+      │
+      │  /system/bin/su $TERMUX_UID
+      ▼
+uid=10172 + untrusted_app_27 context
+      │
+      ▼
+fwmarkd  ← "now it works because we have the right SELinux context"
+```
+
+**Why that reasoning is wrong:** `fwmarkd` doesn't care about your SELinux domain for *routing*. It cares only for *access* — can you open the socket at all. The routing is purely UID-based. What the old approach accidentally fixed was the `netdomain` permission gap: `ksu` on some builds lacked permission to reach `fwmarkd`/`dnsproxyd`, and impersonating `untrusted_app_27` (which has `netdomain`) worked around it.
+
+Current upstream KernelSU explicitly grants `ksu` the `netdomain` attribute in `kernel/selinux/rules.c` — so on stock KSU/ResuKiSU the `runcon` workaround is entirely unnecessary.
+
+---
+
+#### The DNS subsystem was also completely broken
+
+On top of the wrong SELinux premise, the old approach had a fake DNS implementation:
+
+```
+OLD APPROACH — fake DNS pipeline:
+
+getprop net.dns1          ← system property, often stale/empty
+getprop net.dns2
+getprop dhcp.wlan0.dns1   ← hardcoded interface names
+getprop dhcp.eth0.dns1    ← wlan0, eth0, rmnet0, rmnet_data0 only
+grep '^nameserver' /proc/net/pnp  ← legacy Linux interface
+         │
+         ▼
+write $PREFIX/etc/resolv.conf
+         │
+         ▼  "DNS populated from system properties" ✓ (printed)
+         │
+         ▼
+app calls getaddrinfo()
+         │
+         ▼
+Android libc resolver
+         │
+         ▼  reads Android's internal resolver state
+         │  NOT $PREFIX/etc/resolv.conf   ← file is ignored
+         │
+         ▼
+DNS works or fails based on UID/netd state alone
+```
+
+**Three compounding failures:**
+
+| Failure | Detail |
+|---|---|
+| Wrong consumer | Modern Android (Python, curl in Termux) uses Android's bionic resolver via `dnsproxyd`, not `/etc/resolv.conf`. The file is irrelevant. |
+| Stale on network change | The file was only written when empty. Switch from Wi-Fi → mobile → VPN → Private DNS: the file never updates, while Android's resolver state changes dynamically. |
+| Wrong interface names | `wlan0`, `eth0`, `rmnet0`, `rmnet_data0` are hardcoded. Modern devices use `wlan1`, `rmnet_data1`, `ccmni0`, `v4-rmnet...`, etc. Even when they exist, the DNS for an interface isn't necessarily the DNS for a given UID at that moment. |
+
+---
+
+#### What `txsu` does instead
+
+The entire networking implementation is **deleted**. No `resolv.conf` writing, no `getprop`, no interface scanning, no `runcon`.
+
+The fix is two `stat` calls:
+
+```
+txsu startup
+      │
+      ├── IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
+      │              ▲
+      │              └── GID of the dnsproxyd socket
+      │                  = the Android "inet" group
+      │                  detected dynamically, works on all devices
+      │
+      ├── SGID=$(stat -c '%g' /storage)
+      │
+      ▼
+/system/bin/su
+    -G $IGID       ← add inet supplementary group
+    -G $SGID       ← add storage supplementary group
+    $TUID
+    /system/bin/sh -c '... exec zsh -l -i'
+              │
+              ▼
+    process credentials:
+      uid  = 10172
+      gid  = 10172
+      groups = [ 10172, $IGID, $SGID ]
+              │
+              ▼
+    connect() / getaddrinfo()
+              │
+              ▼
+    fwmarkd: client has inet group → socket allowed
+    netd:    getNetworkForConnect(10172) → correct network
+    dnsproxyd: uid=10172 → correct DNS resolver state
+              │
+              ▼
+    internet works ✅
+```
+
+**Why `stat` on the socket:** the `inet` group GID is not a fixed number across all Android devices and versions. `stat -c '%g' /dev/socket/dnsproxyd` reads it directly from the socket that the group is meant to grant access to — self-documenting, device-agnostic, always correct.
+
+**Why not `runcon`:** the `netdomain` SELinux permission is already present in `ksu` on current KSU/ResuKiSU. If it weren't, the correct fix is `sepolicy.rule` (which the module ships), not impersonating an app domain at runtime.
+
+**Why no `resolv.conf`:** Android's resolver bypasses it entirely. Termux processes using Python, curl, wget, git all go through bionic's `getaddrinfo()` → `dnsproxyd`. The correct DNS state flows automatically once the process has the right UID and `inet` group.
 
 ---
 
