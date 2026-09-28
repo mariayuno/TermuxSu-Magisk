@@ -1,6 +1,8 @@
 <div align="center">
 
-# `txsu` — TermuxSu
+<h1>
+  <img src="https://img.shields.io/badge/%24-txsu-00ff99?style=for-the-badge&labelColor=0d1117&color=00ff99&logo=gnubash&logoColor=00ff99" alt="txsu">
+</h1>
 
 **Drop into a proper Termux shell from any root session.**
 
@@ -8,326 +10,452 @@
 txsu
 ```
 
-*SSH into your phone, ADB into it, su from another app — one command gives you your full configured Termux environment with correct identity, networking, storage, and shell initialization.*
+*One command. Correct UID, groups, environment, networking, storage, and shell init — from SSH, ADB, or any root app.*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Android](https://img.shields.io/badge/Android-7%2B-green.svg)
-![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KSU%20%7C%20APatch-orange.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-00bfff?style=flat-square&labelColor=0d1117)](LICENSE)
+![Android](https://img.shields.io/badge/Android-7%2B-3ddc84?style=flat-square&labelColor=0d1117)
+![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KSU%20%7C%20APatch-ff6b6b?style=flat-square&labelColor=0d1117)
+![Shell](https://img.shields.io/badge/Shell-zsh%20%7C%20bash-f7c948?style=flat-square&labelColor=0d1117)
 
 </div>
 
 ---
 
-## The Problem
+## 📋 Table of Contents
 
-When you `su` to your Termux UID from a root session, you don't get a Termux shell. You get a broken shell that looks like one. Networking fails. `/sdcard` is inaccessible. `sudo` and `tsu` don't work. Your PATH is corrupted. Your `.zshrc` either doesn't load, or loads three times.
-
-The reason is that Android's framework does a lot of work when it launches an app through Zygote — assigning supplementary groups, initializing the environment, wiring up the resolver — and a bare `su <uid>` replicates none of it.
-
-`txsu` replicates what matters. Precisely, portably, and without security hacks.
-
----
-
-## What `txsu` Does
-
-```
-ROOT SESSION (SSH / ADB / another app)
-          │
-          │  environment NOT inherited
-          ▼
-      ┌───────┐
-      │  txsu │
-      └───┬───┘
-          │  stat-based UID/GID detection
-          │  inet + storage supplementary groups
-          │  complete Termux env constructed from scratch
-          ▼
-    zsh -l -i  ← your .zshrc, your PATH, sudo works
-```
-
-Every invocation:
-
-1. Detects Termux `UID`/`GID` via `stat` on the data directory — no hardcoding, no caching
-2. Detects the `inet` GID dynamically from `/dev/socket/dnsproxyd`
-3. Detects the `storage` GID dynamically from `/storage`
-4. Builds a clean environment from scratch: `HOME`, `PREFIX`, `ZDOTDIR`, `PATH`, `TMPDIR`, all `ANDROID_*` and `TERMUX_*` vars
-5. Clears `LD_LIBRARY_PATH`, loads `libtermux-exec-ld-preload.so`
-6. `exec`s into `zsh -l -i` — a proper login shell so `.zshrc` runs exactly once
+- [The Problem](#-the-problem)
+- [Install](#-install)
+- [Requirements](#-requirements)
+- [How It Works — Full Flowchart](#-how-it-works--full-flowchart)
+- [Script Walkthrough](#-script-walkthrough)
+  - [Variables](#variables-declared)
+  - [Shell Detection](#shell-detection)
+  - [Preflight Checks](#preflight-checks)
+  - [Dynamic GID Detection](#dynamic-gid-detection)
+  - [The su Invocation](#the-su-invocation)
+  - [Environment Construction](#environment-construction)
+- [Why Each Decision Was Made](#-why-each-decision-was-made)
+- [Security Notes](#-security-notes)
 
 ---
 
-## Install
+## 🔥 The Problem
 
-Flash `TermuxSu-Magisk.zip` in Magisk / KernelSU / APatch, then run `txsu` from any root shell.
+When you `su` to your Termux UID from a root session, you don't get a Termux shell.
+You get a **broken impostor** that looks like one.
 
-### Requirements
+| What breaks | Why |
+|---|---|
+| 🌐 Networking | Missing `inet` supplementary group — can't open `dnsproxyd` socket |
+| 💾 `/sdcard` access | Missing `storage` supplementary group — FUSE denies access |
+| 🔧 `sudo` / `tsu` | Corrupted PATH or `.zshrc` never loads |
+| 📦 PATH duplicated | Naive env-copy makes `.zshrc` append paths 3× |
+| 🐚 Wrong shell | No zsh? Crashes instead of falling back |
 
-- Rooted device: Magisk, KernelSU, ResuKiSU, or APatch
-- Termux with zsh installed (`pkg install zsh`)
-- Android 7+
-
----
-
-## Design
-
-`txsu` was built by working through four distinct failure modes in existing approaches. Each hurdle below documents what was broken, why, and what the correct fix is.
-
----
-
-### Hurdle 1 — Getting a shell that actually *is* Termux
-
-The foundational problem: getting a shell with the right UID, right groups, right env, and right toolchain, from a root session.
-
-#### What Android does when Termux starts normally
-
-```
-Android Framework (ActivityManager)
-         │
-         │  fork request with full credential spec
-         ▼
-      Zygote
-         │
-         ├── UID  = <termux uid>
-         ├── GID  = <termux gid>
-         ├── supplementary groups = [ inet, sdcard_rw, ... ]
-         ├── SELinux domain = untrusted_app_27
-         ├── capabilities stripped
-         └── env = framework-initialized
-         │
-         ▼
-   com.termux process → Termux terminal service → pty → zsh
-```
-
-A root bridge has to approximate this from nothing, using only `su`.
-
-#### What naive approaches do wrong
-
-Common implementations read `/proc/<pid>/environ` of a running Termux process, parse it into an env string, and pass it to `su`. This has multiple compounding failure modes:
-
-| # | Problem | Impact |
-|---|---------|--------|
-| ① | `/proc/<pid>/environ` is attacker-controlled data | root reads untrusted input |
-| ② | Env string unquoted → word splitting + glob expansion | `FOO=hello world` becomes two args |
-| ③ | Shell path read from Termux-writable `passwd` file | shell path can be injected |
-| ④ | Cache written unquoted | `; payload` in shell name becomes shell syntax |
-| ⑤ | Cache sourced as root code | **RCE** — Termux controls what root executes |
-| ⑥ | `runcon true` used as a probe | proves nothing about the full chain |
-| ⑦ | SELinux transition before UID switch | transition order matters to the kernel |
-| ⑧ | `su <uid>` with no `-g`/`-G` flags | missing `inet`, `sdcard_rw` → network + storage broken |
-
-#### What `txsu` does
-
-The entire design principle: **construct everything from verified integers, never source external data, never inherit the root environment.**
-
-```
-root shell
-      │
-      ├── stat -c '%u' /data/data/com.termux    → TUID
-      ├── stat -c '%g' /data/data/com.termux    → TGID
-      ├── stat -c '%g' /dev/socket/dnsproxyd    → IGID (inet)
-      ├── stat -c '%g' /storage                 → SGID (storage)
-      │
-      │   ┌──────────────────────────────────────┐
-      │   │  stat output = integers only         │
-      │   │  cannot contain shell metacharacters │
-      │   │  no Termux filesystem involved       │
-      │   └──────────────────────────────────────┘
-      │
-      ▼
-/system/bin/su -g $TGID -G $IGID -G $SGID $TUID /system/bin/sh -c '
-      │
-      │  NOW INSIDE uid=<termux uid> PROCESS
-      │  root env is GONE — sh -c starts clean
-      │
-      ├── export HOME, PREFIX, ZDOTDIR, PATH, TMPDIR, TERM, LANG
-      ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS / ART_ROOT / ...
-      ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
-      ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
-      ├── export SHELL=$PREFIX/bin/zsh
-      ├── unset LD_LIBRARY_PATH
-      ├── export LD_PRELOAD=libtermux-exec-ld-preload.so
-      ├── cd $HOME
-      └── exec $PREFIX/bin/zsh -l -i    ✅
-'
-```
-
-**Why `stat` for UID/GID:** `stat -c '%u'` returns a decimal integer. Integers cannot contain shell metacharacters. This eliminates the entire class of injection bugs from using `passwd`, `dumpsys`, `pm`, or process scanning.
-
-**Why `unset LD_LIBRARY_PATH`:** Root/KSU/SSH sessions may carry `LD_LIBRARY_PATH` pointing at system paths. If that survives into Termux's zsh, the dynamic linker picks up wrong `.so` files. Clearing it first ensures `libtermux-exec-ld-preload.so` operates cleanly.
-
-**Why `exec zsh -l -i`:** `-l` makes it a login shell (reads `.zprofile`). `-i` makes it interactive (reads `.zshrc`). Together they give a full configured Termux environment — custom PATH, aliases, plugins, and `sudo`/`tsu` working correctly.
+`txsu` fixes all of this. Precisely, portably, and without SELinux hacks.
 
 ---
 
-### Hurdle 2 — Internet
+## 📦 Install
 
-This was the most misdiagnosed problem in prior implementations. The old fix was a `runcon` call to switch SELinux domains. That reasoning is wrong.
-
-#### How Android's network stack actually works
-
-```
-process calls connect() / getaddrinfo()
-              │
-              ▼
-       ┌──────────────────────────────────────────┐
-       │  Does this process have permission to    │
-       │  reach /dev/socket/fwmarkd ?             │  ← SELinux check (netdomain)
-       │  reach /dev/socket/dnsproxyd ?           │
-       └──────────────────┬───────────────────────┘
-                          │ yes
-                          ▼
-                   FwmarkServer (netd)
-                          │
-                          │  getNetworkForConnect(client->getUid())
-                          │                              ↑
-                          │                       UID — not SELinux domain
-                          ▼
-                   correct network route + DNS
-```
-
-The routing decision in `FwmarkServer.cpp` is UID-based. SELinux only gates whether the process can *open the socket at all* — via the `netdomain` attribute. These are two separate checks.
-
-#### Why `runcon` was the wrong fix
-
-`runcon untrusted_app_27` switches the SELinux domain, which unblocks socket access on builds where `ksu` lacked `netdomain`. But it was solving the access problem while misidentifying the root cause as a routing problem. On current KernelSU, `ksu` explicitly has `netdomain` in `kernel/selinux/rules.c` — `runcon` is entirely unnecessary.
-
-The real problem was always simpler: the process was missing the `inet` supplementary group.
+### Option A — Flash as Magisk Module *(recommended)*
 
 ```sh
-# Proven live on device:
-
-# UID only — fails
-su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
-# → PermissionError(13, 'Permission denied')   ← DAC failure, not SELinux
-
-# UID + inet group — works
-su -g 10172 -G 3003 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
-# → SUCCESS; getaddrinfo("example.com") → [('172.66.147.243', ...)]
+# Download the latest release zip
+# Flash in Magisk / KernelSU / APatch Manager
+# Reboot
+txsu   # from any root shell
 ```
 
-`/dev/socket/dnsproxyd` is `gid=<inet> mode=660`. Without that group, the process can't open the socket. One supplementary group. No SELinux change.
-
-#### What `txsu` does
-
-Deletes the entire networking subsystem — no `resolv.conf` writing, no `getprop`, no interface scanning, no `runcon`. Adds the `inet` GID detected dynamically:
+### Option B — Manual
 
 ```sh
-IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
-# → the GID of the socket that inet access gates
-# → works on all devices, all Android versions
+# As root on your device
+cp txsu /system/bin/txsu
+chmod 755 /system/bin/txsu
 ```
 
-**Why not copy all real Termux groups:** A real Termux process has 5 supplementary groups. Two matter for a shell session: `inet` (network) and `storage` (sdcard). `stat`-based detection of those two is more portable — it doesn't require a live Termux process.
-
-**Why no `resolv.conf`:** Android's resolver bypasses it entirely. Termux processes using Python, curl, wget, git all go through bionic's `getaddrinfo()` → `dnsproxyd`. DNS state flows automatically once the process has the right UID and `inet` group.
+> **Termux prerequisite:** `pkg install zsh` *(or `pkg install bash` as fallback)*
 
 ---
 
-### Hurdle 3 — Internal storage access
+## ✅ Requirements
 
-Storage access failure was also misdiagnosed. The old approach tried patching `resolv.conf`. The real problem was a different missing supplementary group.
+| Requirement | Details |
+|---|---|
+| Root | Magisk, KernelSU, ResuKiSU, or APatch |
+| Termux | Any recent version |
+| Shell | `zsh` preferred, `bash` accepted — at least one must be installed |
+| Android | 7.0+ |
 
-#### How Android grants storage access to apps
+---
 
-Zygote assigns supplementary groups explicitly when forking an app process:
-
-```
-Zygote fork (for com.termux)
-      ├── uid  = <termux uid>
-      ├── gid  = <termux gid>
-      └── supplementary groups:
-            1077   → log
-            3003   → inet         (network socket access)
-            9997   → everybody    (shared storage)
-           20xxx   → u0_aXXX_cache
-           50xxx   → all_aXXX     (app-specific external storage)
-```
-
-The `everybody` (9997) and per-app groups give the process access to `/sdcard` and `/storage/emulated/0`. These are enforced at the FUSE layer — the storage daemon checks group membership, not just UID.
-
-A plain `su <uid>` gives you only the UID. No supplementary groups:
+## 🗺 How It Works — Full Flowchart
 
 ```
-uid=10172  gid=10172  groups=10172
-
-      ├── /sdcard              ❌  FUSE checks everybody/storage group
-      ├── /storage/emulated/0  ❌  same
-      └── /dev/socket/dnsproxyd ❌  needs inet, mode 0660 gid=inet
+┌─────────────────────────────────────────────────────────────────┐
+│              ROOT SESSION  (SSH / ADB / root app)               │
+│                    uid=0 · env=root's env                       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+                    ┌────────────────┐
+                    │  run:  txsu    │
+                    └───────┬────────┘
+                            │
+             ───────────────▼───────────────
+            │        PREFLIGHT CHECKS        │
+            │  ✔ running as root?            │
+            │  ✔ /data/data/com.termux  ?    │
+            │  ✔ Termux home exists?         │
+            │  ✔ libtermux-exec-ld-preload?  │
+             ───────────────┬───────────────
+                            │ all pass
+                            ▼
+             ───────────────────────────────
+            │         SHELL DETECTION        │
+            │                               │
+            │   zsh available?  ──yes──►  SHELL=zsh   ZDOTDIR set  │
+            │        │                                              │
+            │       no                                             │
+            │        │                                             │
+            │   bash available? ──yes──►  SHELL=bash              │
+            │        │                                             │
+            │       no                                             │
+            │        │                                             │
+            │       die("install zsh or bash")                    │
+             ───────────────┬───────────────────────────────────
+                            │
+                            ▼
+             ─────────────────────────────────────
+            │      DYNAMIC GID DETECTION (stat)   │
+            │                                     │
+            │  TUID = stat '%u' com.termux/       │
+            │  TGID = stat '%g' com.termux/       │
+            │  IGID = stat '%g' /dev/socket/      │
+            │                      dnsproxyd      │  ← inet group
+            │  SGID = stat '%g' /storage          │  ← storage group
+             ─────────────────────┬───────────────
+                                  │
+                    ──────────────▼──────────────
+                   │       su INVOCATION          │
+                   │                             │
+                   │  /system/bin/su             │
+                   │    -g  TGID                 │  ← primary group
+                   │    -G  IGID                 │  ← +inet
+                   │    -G  SGID                 │  ← +storage
+                   │    TUID                     │  ← UID switch
+                   │    /system/bin/sh -c '...'  │
+                    ──────────────┬──────────────
+                                  │
+                    ┌─────────────▼──────────────────────────────┐
+                    │    INNER SHELL  (uid=TUID, clean env)       │
+                    │                                             │
+                    │  export HOME        TERMUX_HOME            │
+                    │  export PREFIX      TERMUX_PREFIX          │
+                    │  export ZDOTDIR     ~/.config/zsh  (zsh)   │
+                    │  export TERM        xterm-256color         │
+                    │  export LANG        en_US.UTF-8            │
+                    │                                             │
+                    │  export TERMUX__*   (rootfs, home, prefix) │
+                    │  export TERMUX_APP__* (pkg name, data dir) │
+                    │                                             │
+                    │  export ANDROID_ROOT / DATA / STORAGE      │
+                    │  export ANDROID_ART_ROOT / I18N / TZDATA   │
+                    │                                             │
+                    │  export PATH  PREFIX/bin : applets : system│
+                    │  export TMPDIR                              │
+                    │  export EXTERNAL_STORAGE  /sdcard          │
+                    │                                             │
+                    │  unset  LD_LIBRARY_PATH   ← clear root junk│
+                    │  export LD_PRELOAD  libtermux-exec-*.so    │
+                    │                                             │
+                    │  cd HOME                                    │
+                    └──────────────┬──────────────────────────────┘
+                                   │
+                                   ▼
+                    ┌──────────────────────────────┐
+                    │   exec  SHELL  -l  -i         │
+                    │                              │
+                    │   zsh:  sources .zprofile    │
+                    │         sources .zshrc       │
+                    │                              │
+                    │   bash: sources .bash_profile│
+                    │         sources .bashrc      │
+                    └──────────────┬───────────────┘
+                                   │
+                    ───────────────▼───────────────
+                   │                               │
+                   │   ✅  FULL TERMUX SHELL        │
+                   │                               │
+                   │   uid = Termux UID            │
+                   │   groups = Termux + inet +    │
+                   │            storage            │
+                   │   internet works              │
+                   │   /sdcard works               │
+                   │   sudo / tsu works            │
+                   │   .zshrc loaded exactly once  │
+                   │   PATH clean, no duplicates   │
+                    ───────────────────────────────
 ```
 
-#### What `txsu` does
+---
 
-Detects the storage GID dynamically and passes it as a supplementary group:
+## 🔬 Script Walkthrough
+
+### Variables Declared
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `SU` | `/system/bin/su` | Path to the system `su` binary |
+| `TERMUX_DATA` | `/data/data/com.termux` | Termux app data root |
+| `TERMUX_PREFIX` | `…/files/usr` | Termux package prefix (`$PREFIX`) |
+| `TERMUX_HOME` | `…/files/home` | Termux home directory (`$HOME`) |
+| `TERMUX_ZDOTDIR` | `…/home/.config/zsh` | XDG zsh config dir (`$ZDOTDIR`) |
+| `TERMUX_EXEC` | `…/lib/libtermux-exec-ld-preload.so` | Termux's exec preload library |
+| `TERMUX_SHELL` | detected at runtime | `zsh` or `bash`, whichever is available |
+| `SHELL_OPTS` | `-l -i` | Login + interactive flags for the shell |
+| `ZDOTDIR_EXPORT` | set if zsh, empty if bash | Conditionally exports `ZDOTDIR` |
+| `TUID` | `stat '%u' TERMUX_DATA` | Termux app UID (e.g. `10172`) |
+| `TGID` | `stat '%g' TERMUX_DATA` | Termux app GID |
+| `IGID` | `stat '%g' /dev/socket/dnsproxyd` | Android `inet` group — gates network access |
+| `SGID` | `stat '%g' /storage` | Android storage group — gates sdcard access |
+
+---
+
+### Shell Detection
 
 ```sh
-SGID=$(stat -c '%g' /storage)
-# → GID of the /storage mount point
-# → what FUSE/sdcardfs checks for access
+if [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
+    SHELL_OPTS="-l -i"
+    ZDOTDIR_EXPORT="export ZDOTDIR='$TERMUX_ZDOTDIR'"
+elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
+    SHELL_OPTS="-l -i"
+    ZDOTDIR_EXPORT=""
+else
+    die "no usable shell found (install zsh or bash: pkg install zsh)"
+fi
 ```
 
-**Why `stat` on the mount point:** The storage GID is not fixed across Android versions and custom ROMs. Reading it from `/storage` itself means the detection is always correct and self-documenting.
+```
+  zsh exists? ──yes──► use zsh, set ZDOTDIR
+       │
+       no
+       │
+  bash exists? ──yes──► use bash, skip ZDOTDIR
+       │
+       no
+       │
+  die() ──────────────► error + exit 1
+```
 
-**Result:** `/sdcard` read/write works. `curl`, `wget`, `git`, `pip` all work. No SELinux manipulation. No `resolv.conf`. No process scanning.
+<details>
+<summary>💡 Why prefer zsh and why set ZDOTDIR?</summary>
+
+`zsh` is the preferred shell because Termux's default configuration, plugin ecosystem, and most user configs target it. `bash` is a perfectly valid fallback — nearly all Termux users have one or the other.
+
+`ZDOTDIR` tells zsh where to find `.zshrc`. If a user follows XDG conventions and keeps their zsh config under `~/.config/zsh/`, zsh will not find it without `ZDOTDIR` being set. By setting it in the launcher before `exec zsh`, we guarantee `.zshrc` loads regardless of home directory quirks.
+
+`bash` doesn't have `ZDOTDIR` — it always reads `.bashrc` from `$HOME`, so no equivalent export is needed.
+
+</details>
 
 ---
 
-### Hurdle 4 — `sudo` / `tsu`
+### Preflight Checks
 
-`sudo` and `tsu` inside the bridged shell failed or behaved incorrectly. Two compounding problems: a corrupted PATH and missing shell initialization.
+```sh
+die() { echo "txsu: ERROR: $*" >&2; exit 1; }
 
-#### What the naive approach does to PATH
-
-Reading a live Termux process's environment captures its already-expanded PATH — one that `.zshrc` has already built up with custom entries. Then launching `zsh -l` runs `.zshrc` again and appends those same paths on top. The result:
-
-```
-PATH=/prefix/bin:~/.npm-global/bin:~/.local/bin:   ← from live env
-     ~/.npm-global/bin:~/.local/bin:               ← .zshrc ran again
-     ~/.npm-global/bin:~/.local/bin:               ← and again
+[ "$(id -u)" = 0 ]         || die "must run as root"
+[ -d "$TERMUX_DATA" ]      || die "Termux data directory not found"
+[ -d "$TERMUX_HOME" ]      || die "Termux home not found"
+[ -f "$TERMUX_EXEC" ]      || die "Termux exec preload not found"
 ```
 
-Every custom path segment triplicated. `sudo` finds the wrong binary, or an ambiguous one, or fails entirely.
+| Check | Guards against |
+|---|---|
+| `id -u = 0` | Running without root — `su` would fail silently downstream |
+| `-d TERMUX_DATA` | Termux not installed, or wrong package name |
+| `-d TERMUX_HOME` | Termux installed but never opened (home not yet created) |
+| `-f TERMUX_EXEC` | Old Termux version without `libtermux-exec-ld-preload.so` |
 
-#### Missing ZDOTDIR
+<details>
+<summary>💡 Why check TERMUX_EXEC specifically?</summary>
 
-Without `ZDOTDIR` pointing at `~/.config/zsh`, zsh looks for `.zshrc` in `HOME`. If the user's zsh config follows XDG layout under `.config/zsh/`, none of it loads. `sudo` isn't found. Custom tools aren't found. Nothing works as expected.
+`libtermux-exec-ld-preload.so` is what makes Termux binaries runnable from a non-Termux process. Without it as `LD_PRELOAD`, Termux's ELF binaries (compiled for Termux's non-standard linker paths) fail to load. This library intercepts `execve` calls and rewrites paths so they resolve correctly. If it's missing, every command in the shell will fail with `not found` or `exec format error`.
 
-#### What `txsu` does
-
-Provide only a **base PATH** in the launcher. Let `.zshrc` do its job exactly once.
-
-```
-txsu launcher provides:
-      PATH = $PREFIX/bin:$PREFIX/bin/applets:system paths
-                ↑ base only — no user additions
-
-zsh -l -i runs:
-      .zprofile  → login-level setup
-      .zshrc     → adds npm-global, mason, .local/bin — ONCE
-
-Result:
-      PATH = $PREFIX/bin:~/.npm-global/bin:~/.local/bin:...
-               ↑ clean, no duplicates
-```
-
-**Why `ZDOTDIR` explicitly:** Set before `exec zsh` so that `.zshrc` loads from the correct XDG location regardless of how `HOME` is configured.
-
-**Why `-l -i` together:** `-l` triggers `.zprofile` (login-level env setup). `-i` triggers `.zshrc` (interactive config, aliases, PATH additions, plugins). Either alone is insufficient. Together they produce an experience identical to opening a normal Termux terminal.
-
-**Result:** `.zshrc` loads once, PATH is clean, `sudo` resolves to `tsu` in `$PREFIX/bin`, `tsu` escalates to root correctly.
+</details>
 
 ---
 
-## Security Notes
+### Dynamic GID Detection
 
-- All UID/GID values are obtained via `stat` — integer output only, immune to injection
-- No external files are read or sourced during escalation
-- No environment is inherited from the root shell
-- No Termux filesystem is touched before the `exec`
-- No SELinux domain switching
-- No cache files
+```sh
+TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
+TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
+IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
+SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
+```
+
+```
+  /data/data/com.termux  ──stat──►  TUID (e.g. 10172)
+  /data/data/com.termux  ──stat──►  TGID (e.g. 10172)
+  /dev/socket/dnsproxyd  ──stat──►  IGID (e.g. 3003)  ← inet group
+  /storage               ──stat──►  SGID (e.g. 1023)  ← storage group
+```
+
+<details>
+<summary>💡 Why stat instead of hardcoding or reading /etc/group?</summary>
+
+`stat -c '%u'` and `stat -c '%g'` return decimal integers. Integers cannot contain shell metacharacters — this eliminates the entire class of injection vulnerabilities from using `passwd`, `pm dump`, `dumpsys`, or `/proc/<pid>/environ`.
+
+GIDs are not fixed across Android versions, OEM builds, or custom ROMs. Reading the GID directly from the resource it guards (the `dnsproxyd` socket for `inet`, the `/storage` mount for storage) means the detection is always correct and self-documenting. The `inet` group is precisely the group that owns `dnsproxyd` — detecting it from any other source would be guessing.
+
+</details>
 
 ---
 
-## License
+### The `su` Invocation
+
+```sh
+"$SU" \
+    -g "$TGID" \
+    -G "$IGID" \
+    -G "$SGID" \
+    "$TUID" \
+    /system/bin/sh \
+    -c "..."
+```
+
+| Flag | Value | Effect |
+|---|---|---|
+| `-g TGID` | Termux GID | Sets primary group to Termux's GID |
+| `-G IGID` | inet GID | Adds `inet` supplementary group → network socket access |
+| `-G SGID` | storage GID | Adds `storage` supplementary group → sdcard/FUSE access |
+| `TUID` | Termux UID | Switches UID from 0 (root) to Termux's UID |
+| `/system/bin/sh -c '...'` | | Intermediate shell to build the env before exec |
+
+<details>
+<summary>💡 Why does missing the inet group break networking?</summary>
+
+Android's `dnsproxyd` socket is `gid=inet mode=660`. A process without the `inet` supplementary group cannot open it — this is a plain Unix DAC (discretionary access control) failure, not SELinux.
+
+Without `dnsproxyd` access, `getaddrinfo()` fails. DNS resolution is broken. Every network call (`curl`, `wget`, `git`, `pip`) fails.
+
+Proven live: `su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'` → `PermissionError(13)`.
+Then: `su -G 3003 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'` → success, DNS resolves.
+
+One supplementary group. No SELinux change. No `resolv.conf` writing. No `runcon`.
+
+</details>
+
+<details>
+<summary>💡 Why does missing the storage group break /sdcard?</summary>
+
+`/sdcard` and `/storage/emulated/0` are served by a FUSE daemon (or sdcardfs). The daemon checks supplementary group membership — not just UID — before granting access. When Android's Zygote forks a real app process, it explicitly assigns these storage groups. A bare `su <uid>` doesn't replicate them, so the process can't access external storage even though it has the right UID.
+
+Detecting the GID via `stat -c '%g' /storage` reads it directly from the mount point being guarded, so it works across all Android versions and custom ROMs without hardcoding.
+
+</details>
+
+<details>
+<summary>💡 Why use /system/bin/sh -c as an intermediate step?</summary>
+
+`su ... TUID /system/bin/sh -c '...'` drops privileges first, then lets the inner `sh -c` string build the environment from scratch. The root shell's environment is completely gone — `sh -c` starts clean. This means no root-owned paths, no stale `LD_LIBRARY_PATH`, no leaked variables can contaminate the Termux shell. The `exec` at the end of the inner string replaces the intermediate `sh` with the final shell process, leaving no wrapper.
+
+</details>
+
+---
+
+### Environment Construction
+
+Inside the inner `sh -c`, the full environment is built from hardcoded known-good values before `exec`ing the shell:
+
+```
+  GROUP A — Termux identity
+  ─────────────────────────────────────────────────────────────────
+  HOME          = /data/data/com.termux/files/home
+  PREFIX        = /data/data/com.termux/files/usr
+  ZDOTDIR       = …/home/.config/zsh              (zsh only)
+  SHELL         = PREFIX/bin/zsh  (or bash)
+  TMPDIR        = PREFIX/tmp
+  TERM          = xterm-256color
+  LANG          = ${LANG:-en_US.UTF-8}
+
+  GROUP B — Termux internal vars (used by Termux apps and plugins)
+  ─────────────────────────────────────────────────────────────────
+  TERMUX__ROOTFS_DIR    = /data/data/com.termux/files
+  TERMUX__HOME          = …/files/home
+  TERMUX__PREFIX        = …/files/usr
+  TERMUX__UID           = $(id -u)             ← evaluated inside inner shell
+  TERMUX__USER_ID       = 0
+  TERMUX_APP__PACKAGE_NAME = com.termux
+  TERMUX_APP__DATA_DIR     = /data/data/com.termux
+
+  GROUP C — Android system paths
+  ─────────────────────────────────────────────────────────────────
+  ANDROID_ROOT          = /system
+  ANDROID_DATA          = /data
+  ANDROID_STORAGE       = /storage
+  ANDROID_ASSETS        = /system/app
+  ANDROID_ART_ROOT      = /apex/com.android.art
+  ANDROID_I18N_ROOT     = /apex/com.android.i18n
+  ANDROID_TZDATA_ROOT   = /apex/com.android.tzdata
+  EXTERNAL_STORAGE      = /sdcard
+
+  GROUP D — PATH and linker
+  ─────────────────────────────────────────────────────────────────
+  PATH          = PREFIX/bin : PREFIX/bin/applets :
+                  /system/bin : /system/xbin :
+                  /system/sbin : /sbin : /sbin/bin
+
+  unset LD_LIBRARY_PATH       ← clear root linker state
+  LD_PRELOAD    = libtermux-exec-ld-preload.so
+```
+
+<details>
+<summary>💡 Why is PATH only the base set, without user additions?</summary>
+
+If a previous Termux process's environment were captured and reused, it would contain a PATH that `.zshrc` (or `.bashrc`) had already expanded — with npm-global, mason, `.local/bin`, etc. When the new shell then sourced its rc file, those paths would be appended again. On a typical dev setup this results in every custom path appearing 3× or more.
+
+By providing only the base `PREFIX/bin` as the initial PATH, the shell's rc file runs exactly once on a clean base, adding each custom path exactly once. The result is identical to opening a normal Termux terminal.
+
+</details>
+
+<details>
+<summary>💡 Why unset LD_LIBRARY_PATH before setting LD_PRELOAD?</summary>
+
+Root shells — especially KernelSU's `ksu` shell or SSH sessions — may carry `LD_LIBRARY_PATH` pointing at system library paths. If that variable survives into the Termux shell, the dynamic linker picks up system `.so` files before Termux's own, which breaks binaries that expect Termux's library versions. Clearing it first ensures `libtermux-exec-ld-preload.so` operates in a clean linker environment.
+
+</details>
+
+<details>
+<summary>💡 Why -l -i together when exec-ing the shell?</summary>
+
+`-l` (login) causes the shell to source login-level config: `.zprofile` for zsh, `.bash_profile` for bash. This sets up environment-level things like `PATH` additions from package managers.
+
+`-i` (interactive) causes the shell to source interactive config: `.zshrc` / `.bashrc`. This sets up aliases, plugins, prompt, and tool-specific PATH entries.
+
+Either flag alone is insufficient. Together, they produce an experience indistinguishable from opening a native Termux terminal session. Without `-l`, `.zprofile` is skipped and some env setup is missing. Without `-i`, the shell is technically non-interactive and `.zshrc` may not run.
+
+</details>
+
+---
+
+## 🔒 Security Notes
+
+- **No external data sourced** — env is built entirely from hardcoded paths and integer `stat` output
+- **No Termux filesystem read** during escalation — not `passwd`, not cached files, not `/proc/<pid>/environ`
+- **No root environment inherited** — `sh -c` starts with a clean slate
+- **No SELinux domain switching** — no `runcon`, no domain impersonation
+- **Injection-immune GID detection** — `stat` returns integers; integers cannot contain shell syntax
+- **No cache files** — nothing written to disk, nothing sourced back
+
+---
+
+## 📄 License
 
 MIT

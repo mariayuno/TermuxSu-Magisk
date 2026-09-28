@@ -11,10 +11,22 @@ TERMUX_EXEC=/data/data/com.termux/files/usr/lib/libtermux-exec-ld-preload.so
 die() { echo "txsu: ERROR: $*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "must run as root"
-[ -d "$TERMUX_DATA" ]         || die "Termux data directory not found"
-[ -d "$TERMUX_HOME" ]         || die "Termux home not found"
-[ -x "$TERMUX_PREFIX/bin/zsh" ] || die "Termux zsh not found"
-[ -f "$TERMUX_EXEC" ]         || die "Termux exec preload not found"
+[ -d "$TERMUX_DATA" ]    || die "Termux data directory not found"
+[ -d "$TERMUX_HOME" ]    || die "Termux home not found"
+[ -f "$TERMUX_EXEC" ]    || die "Termux exec preload not found"
+
+# Shell detection: prefer zsh, fall back to bash, then sh
+if [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
+    SHELL_OPTS="-l -i"
+    ZDOTDIR_EXPORT="export ZDOTDIR='$TERMUX_ZDOTDIR'"
+elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
+    SHELL_OPTS="-l -i"
+    ZDOTDIR_EXPORT=""
+else
+    die "no usable shell found (install zsh or bash in Termux: pkg install zsh)"
+fi
 
 TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
 TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
@@ -30,7 +42,7 @@ SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
     -c "
         export HOME='$TERMUX_HOME'
         export PREFIX='$TERMUX_PREFIX'
-        export ZDOTDIR='$TERMUX_ZDOTDIR'
+        $ZDOTDIR_EXPORT
 
         export TERM='xterm-256color'
         export LANG='\${LANG:-en_US.UTF-8}'
@@ -44,7 +56,7 @@ SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
         export TERMUX_APP__PACKAGE_NAME='com.termux'
         export TERMUX_APP__DATA_DIR='$TERMUX_DATA'
 
-        export SHELL='$TERMUX_PREFIX/bin/zsh'
+        export SHELL='$TERMUX_SHELL'
         export EXTERNAL_STORAGE='/sdcard'
 
         export ANDROID_ROOT='/system'
@@ -62,7 +74,7 @@ SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
         export LD_PRELOAD='$TERMUX_EXEC'
 
         cd '$TERMUX_HOME' || exit 1
-        exec '$TERMUX_PREFIX/bin/zsh' -l -i
+        exec '$TERMUX_SHELL' $SHELL_OPTS
     "
 
 RC=$?
