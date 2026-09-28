@@ -1,25 +1,21 @@
 #!/system/bin/sh
 # txsu — TermuxSu-Magisk
 # Invoke a full Termux shell from any Android root shell.
-# Correct UID, SELinux context, environment, LD_PRELOAD, and DNS.
+#
+# Strategy: if Termux is running, read EVERYTHING from its live /proc/<pid>
+# entry (SELinux context, env, UID, groups). If not running, derive safely
+# from the filesystem and system properties — zero hardcoded values.
 #
 # Usage:
-#   txsu                    interactive Termux shell (zsh/bash)
-#   txsu -c "command"       run command inside Termux env and exit
-#   txsu python3 script.py  exec binary directly in Termux env
-#   txsu -h | --help        show this help
+#   txsu                    interactive Termux shell
+#   txsu -c "command"       run command in Termux env and exit
+#   txsu <bin> [args...]    exec Termux binary directly
+#   txsu -h | --help        show help
 #
-# Alias: 'termux' → symlink to txsu (created at boot by service.sh)
+# Alias: 'termux' symlinks here (created at boot by service.sh)
 #
 # SPDX-License-Identifier: MIT
 # https://github.com/mariayuno/TermuxSu-Magisk
-
-set -e
-
-TERMUX_PKG="com.termux"
-TERMUX_DATA="/data/data/${TERMUX_PKG}"
-TERMUX_PREFIX="${TERMUX_DATA}/files/usr"
-TERMUX_HOME="${TERMUX_DATA}/files/home"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -28,107 +24,297 @@ info() { printf '[txsu] %s\n'        "$*" >&2; }
 warn() { printf '[txsu] WARN:  %s\n' "$*" >&2; }
 
 usage() {
-  cat >&2 <<'EOF'
+  cat >&2 <<'USAGE'
 txsu — TermuxSu-Magisk
 
-Usage:
   txsu                    Open interactive Termux shell
-  txsu -c <cmd>           Run <cmd> in Termux environment and exit
-  txsu <bin> [args...]    Exec <bin> directly with Termux env (e.g. txsu python3 a.py)
+  txsu -c <cmd>           Run <cmd> in Termux environment
+  txsu <bin> [args...]    Exec Termux binary directly
   txsu -h | --help        Show this help
 
-Alias: 'termux' is a symlink to txsu
-EOF
+Alias: 'termux' -> txsu
+USAGE
   exit 0
 }
 
 # ── preflight ─────────────────────────────────────────────────────────────────
 
-[ "$(id -u)" = "0" ] || die "Must be run as root"
-[ -d "$TERMUX_PREFIX" ] || die "Termux prefix not found: $TERMUX_PREFIX — is Termux installed?"
+[ "$(id -u)" = "0" ] || die "txsu must be run as root"
 
-# ── resolve Termux UID ────────────────────────────────────────────────────────
-# dumpsys fails under ksu context; parse from directory ownership instead.
-# 'ls -lnd' gives numeric uid in field 3.
+TERMUX_PKG="com.termux"
+TERMUX_DATA="/data/data/${TERMUX_PKG}"
+TERMUX_PREFIX="${TERMUX_DATA}/files/usr"
+TERMUX_HOME="${TERMUX_DATA}/files/home"
 
-TERMUX_UID=$(ls -lnd "$TERMUX_DATA" 2>/dev/null | awk '{print $3}')
-[ -n "$TERMUX_UID" ] || die "Could not resolve Termux UID from $TERMUX_DATA"
-# sanity: should be in app uid range (10000–19999)
-if [ "$TERMUX_UID" -lt 10000 ] || [ "$TERMUX_UID" -gt 19999 ]; then
-  die "Resolved UID $TERMUX_UID looks wrong (expected 10000–19999)"
+[ -d "$TERMUX_PREFIX" ] || die "Termux not found at $TERMUX_PREFIX — is Termux installed?"
+
+# ── resolve UID from filesystem (no dumpsys — broken under ksu/apatch) ────────
+# ls -lnd gives numeric uid in field 3; stat -c%u also works on most Androids.
+
+TERMUX_UID=""
+if command -v stat >/dev/null 2>&1; then
+  TERMUX_UID=$(stat -c '%u' "$TERMUX_DATA" 2>/dev/null)
+fi
+if [ -z "$TERMUX_UID" ]; then
+  TERMUX_UID=$(ls -lnd "$TERMUX_DATA" 2>/dev/null | awk '{print $3}')
+fi
+[ -n "$TERMUX_UID" ] && [ "$TERMUX_UID" -gt 0 ] 2>/dev/null \
+  || die "Could not resolve Termux UID from $TERMUX_DATA"
+
+# ── find live Termux PID (best-effort) ───────────────────────────────────────
+# We look for any process owned by the Termux UID. If multiple exist we take
+# the lowest PID (the app's main process). This is optional — used to read
+# the real SELinux context and environment when Termux is running.
+
+TERMUX_PID=""
+for pid in /proc/[0-9]*; do
+  pid="${pid##*/}"
+  owner=$(stat -c '%u' "/proc/$pid" 2>/dev/null) || continue
+  [ "$owner" = "$TERMUX_UID" ] || continue
+  # prefer the process whose cmdline contains the package name
+  cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ')
+  case "$cmdline" in
+    *com.termux*)
+      TERMUX_PID="$pid"
+      break
+      ;;
+  esac
+  # fallback: first process owned by Termux UID
+  [ -z "$TERMUX_PID" ] && TERMUX_PID="$pid"
+done
+
+# ── resolve SELinux context ───────────────────────────────────────────────────
+# Priority:
+#   1. Read from live Termux process /proc/<pid>/attr/current  (exact, zero guessing)
+#   2. Read from Termux data dir SELinux label and mangle type to process type
+#   3. Derive from UID via standard Android MLS formula (last resort)
+
+SELINUX_CTX=""
+
+if [ -n "$TERMUX_PID" ]; then
+  # Method 1: live process — most accurate
+  _ctx=$(cat "/proc/${TERMUX_PID}/attr/current" 2>/dev/null | tr -d '\0\n')
+  # must look like a real context, not empty or "kernel"
+  case "$_ctx" in
+    u:r:untrusted_app*|u:r:platform_app*|u:r:isolated_app*)
+      SELINUX_CTX="$_ctx"
+      info "SELinux context from live process $TERMUX_PID: $SELINUX_CTX"
+      ;;
+  esac
 fi
 
-# ── SELinux context ───────────────────────────────────────────────────────────
-# Format: u:r:untrusted_app_27:s0:c{uid-10000},c256,c512,c768
-# The first category encodes the app's position in the UID space.
-APP_CAT=$(( TERMUX_UID - 10000 ))
-SELINUX_CTX="u:r:untrusted_app_27:s0:c${APP_CAT},c256,c512,c768"
+if [ -z "$SELINUX_CTX" ]; then
+  # Method 2: read file context label from the data dir, convert object→process type
+  # e.g. u:object_r:app_data_file:s0:c172,c256,c512,c768
+  #   →  u:r:untrusted_app_27:s0:c172,c256,c512,c768
+  _fctx=$(ls -ldZ "$TERMUX_DATA" 2>/dev/null | awk '{print $4}')
+  if [ -n "$_fctx" ]; then
+    # extract the sensitivity + categories portion (s0:cX,cY,...)
+    _sens_cats="${_fctx##*:s0}"       # everything from :s0 onward, minus leading junk
+    _sens_cats="s0${_sens_cats}"
 
-# ── DNS guard ─────────────────────────────────────────────────────────────────
-# Termux ships its own resolv.conf at $PREFIX/etc/resolv.conf.
-# Root's /etc/resolv.conf is missing on this device (KSU + Android 14+).
-# Termux DNS works via its own file — just make sure it exists and is populated.
+    # detect Android SDK to pick correct SELinux type
+    SDK=$(getprop ro.build.version.sdk 2>/dev/null)
+    if [ "${SDK:-0}" -ge 28 ]; then
+      _proc_type="untrusted_app_27"
+    elif [ "${SDK:-0}" -ge 26 ]; then
+      _proc_type="untrusted_app_25"
+    else
+      _proc_type="untrusted_app"
+    fi
+
+    SELINUX_CTX="u:r:${_proc_type}:${_sens_cats}"
+    info "SELinux context derived from file label (SDK $SDK): $SELINUX_CTX"
+  fi
+fi
+
+if [ -z "$SELINUX_CTX" ]; then
+  # Method 3: pure formula — standard Android MLS categories
+  # c0 = uid-10000 (app index), c256+c512+c768 = standard app category set
+  # This is correct for AOSP but some vendor ROMs vary — hence methods 1&2 first
+  APP_IDX=$(( TERMUX_UID - 10000 ))
+  SDK=$(getprop ro.build.version.sdk 2>/dev/null)
+  if [ "${SDK:-0}" -ge 28 ]; then
+    _proc_type="untrusted_app_27"
+  elif [ "${SDK:-0}" -ge 26 ]; then
+    _proc_type="untrusted_app_25"
+  else
+    _proc_type="untrusted_app"
+  fi
+  # read categories from data dir label if possible
+  _cats=$(ls -ldZ "$TERMUX_DATA" 2>/dev/null | grep -oE 'c[0-9]+(,c[0-9]+)*' | head -1)
+  [ -z "$_cats" ] && _cats="c${APP_IDX},c256,c512,c768"
+  SELINUX_CTX="u:r:${_proc_type}:s0:${_cats}"
+  warn "SELinux context from formula (Termux not running): $SELINUX_CTX"
+fi
+
+# ── resolve DNS ───────────────────────────────────────────────────────────────
+# Termux uses $PREFIX/etc/resolv.conf for DNS — not the system /etc/resolv.conf
+# (which is missing on many Android 14+ / KSU setups).
+# We populate it from system properties in priority order:
+#   1. Already populated → leave it alone
+#   2. getprop net.dns1 / net.dns2 (set by Android's netd)
+#   3. getprop dhcp.*.dns1 for active interface
+#   4. /proc/net/pnp (set by kernel on some devices)
+
 TERMUX_RESOLV="${TERMUX_PREFIX}/etc/resolv.conf"
+
 if [ ! -s "$TERMUX_RESOLV" ]; then
-  warn "Termux resolv.conf missing or empty — writing fallback DNS"
   mkdir -p "${TERMUX_PREFIX}/etc"
-  printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > "$TERMUX_RESOLV" 2>/dev/null \
-    || warn "Could not write resolv.conf — DNS may not work"
+  {
+    # getprop net.dnsN — most reliable on stock Android
+    for _prop in net.dns1 net.dns2 net.dns3 net.dns4; do
+      _val=$(getprop "$_prop" 2>/dev/null)
+      [ -n "$_val" ] && printf 'nameserver %s\n' "$_val"
+    done
+
+    # dhcp interface dns (covers some custom ROMs)
+    for _iface in wlan0 eth0 rmnet0 rmnet_data0; do
+      for _n in 1 2; do
+        _val=$(getprop "dhcp.${_iface}.dns${_n}" 2>/dev/null)
+        [ -n "$_val" ] && printf 'nameserver %s\n' "$_val"
+      done
+    done
+
+    # /proc/net/pnp fallback (kernel-provided, available on some devices)
+    [ -r /proc/net/pnp ] && grep '^nameserver' /proc/net/pnp 2>/dev/null
+
+  } | sort -u > "$TERMUX_RESOLV.tmp" 2>/dev/null
+
+  if [ -s "$TERMUX_RESOLV.tmp" ]; then
+    mv "$TERMUX_RESOLV.tmp" "$TERMUX_RESOLV"
+    info "DNS written to $TERMUX_RESOLV from system properties"
+  else
+    rm -f "$TERMUX_RESOLV.tmp"
+    warn "Could not resolve DNS from system — network may not work"
+  fi
+else
+  info "DNS already configured: $(cat $TERMUX_RESOLV)"
 fi
 
-# ── pick shell ────────────────────────────────────────────────────────────────
-# Prefer zsh (Termux default), fall back to bash, then sh.
-TERMUX_SHELL="${TERMUX_PREFIX}/bin/zsh"
-[ -x "$TERMUX_SHELL" ] || TERMUX_SHELL="${TERMUX_PREFIX}/bin/bash"
-[ -x "$TERMUX_SHELL" ] || TERMUX_SHELL="${TERMUX_PREFIX}/bin/sh"
-[ -x "$TERMUX_SHELL" ] || die "No usable shell found in ${TERMUX_PREFIX}/bin"
+# ── resolve shell ─────────────────────────────────────────────────────────────
+# Read Termux's own passwd file for the real configured shell.
+# Fall back by scanning available shells in $PREFIX/bin.
 
-# ── build clean environment ───────────────────────────────────────────────────
-# Mirror the real Termux environment faithfully.
-# Source: probe output from a live Termux session.
-TERMUX_PATH="\
-${TERMUX_HOME}/.local/share/cargo/bin:\
-${TERMUX_HOME}/.local/share/go/bin:\
-${TERMUX_HOME}/.local/bin:\
-${TERMUX_HOME}/bin:\
-${TERMUX_PREFIX}/bin:\
-/system/bin:/system/xbin"
+TERMUX_SHELL=""
 
-build_env() {
-  # Core identity
-  printf 'HOME=%s\n'              "$TERMUX_HOME"
-  printf 'PREFIX=%s\n'           "$TERMUX_PREFIX"
-  printf 'TMPDIR=%s\n'           "${TERMUX_PREFIX}/tmp"
-  printf 'SHELL=%s\n'            "$TERMUX_SHELL"
-  printf 'USER=u0_a%s\n'         "$APP_CAT"
-  printf 'LOGNAME=u0_a%s\n'      "$APP_CAT"
-  # Paths & libs
-  printf 'PATH=%s\n'             "$TERMUX_PATH"
-  printf 'LD_LIBRARY_PATH=%s\n'  "${TERMUX_PREFIX}/lib"
-  # LD_PRELOAD: termux-exec patches execve() so binaries find Termux's loader.
-  # Without this, many Termux binaries silently fail or exec the wrong ld.
-  printf 'LD_PRELOAD=%s\n'       "${TERMUX_PREFIX}/lib/libtermux-exec-ld-preload.so"
-  # Locale
-  printf 'LANG=en_US.UTF-8\n'
-  printf 'TERM=%s\n'             "${TERM:-xterm-256color}"
-  # XDG
-  printf 'XDG_CONFIG_HOME=%s\n'  "${TERMUX_HOME}/.config"
-  printf 'XDG_DATA_HOME=%s\n'    "${TERMUX_HOME}/.local/share"
-  printf 'XDG_CACHE_HOME=%s\n'   "${TERMUX_HOME}/.cache"
-  printf 'XDG_STATE_HOME=%s\n'   "${TERMUX_HOME}/.local/state"
-  printf 'XDG_RUNTIME_DIR=%s\n'  "${TERMUX_PREFIX}/tmp"
-  # Termux-specific vars (some tools check these)
-  printf 'TERMUX__PREFIX=%s\n'   "$TERMUX_PREFIX"
-  printf 'TERMUX__HOME=%s\n'     "$TERMUX_HOME"
-  printf 'TERMUX__UID=%s\n'      "$TERMUX_UID"
-  # Android platform (needed by some pkg scripts)
-  printf 'ANDROID_ROOT=%s\n'     "/system"
-  printf 'ANDROID_DATA=%s\n'     "/data"
-  printf 'EXTERNAL_STORAGE=%s\n' "/sdcard"
+# Method 1: passwd (most correct — this is what Termux itself uses)
+if [ -r "${TERMUX_PREFIX}/etc/passwd" ]; then
+  _shell=$(grep "^$(id -u "$TERMUX_UID" 2>/dev/null || echo "u0_a"):" \
+    "${TERMUX_PREFIX}/etc/passwd" 2>/dev/null | cut -d: -f7)
+  # passwd may use relative path like /bin/zsh — prefix it
+  case "$_shell" in
+    /data/*) TERMUX_SHELL="$_shell" ;;
+    /bin/*)  TERMUX_SHELL="${TERMUX_PREFIX}${_shell}" ;;
+  esac
+fi
+
+# Method 2: read from live process env
+if [ -z "$TERMUX_SHELL" ] && [ -n "$TERMUX_PID" ]; then
+  _shell=$(cat "/proc/${TERMUX_PID}/environ" 2>/dev/null \
+    | tr '\0' '\n' | grep '^SHELL=' | cut -d= -f2-)
+  [ -x "$_shell" ] && TERMUX_SHELL="$_shell"
+fi
+
+# Method 3: scan PREFIX/bin for known shells in preference order
+if [ -z "$TERMUX_SHELL" ]; then
+  for _sh in zsh bash fish dash sh; do
+    if [ -x "${TERMUX_PREFIX}/bin/${_sh}" ]; then
+      TERMUX_SHELL="${TERMUX_PREFIX}/bin/${_sh}"
+      break
+    fi
+  done
+fi
+
+[ -n "$TERMUX_SHELL" ] || die "No usable shell found in $TERMUX_PREFIX/bin"
+info "Shell: $TERMUX_SHELL"
+
+# ── resolve LD_PRELOAD ────────────────────────────────────────────────────────
+# Termux ships libtermux-exec-ld-preload.so — essential for execve() patching.
+# Scan for it rather than hardcoding the filename (version may change).
+
+TERMUX_LD_PRELOAD=""
+for _f in "${TERMUX_PREFIX}/lib/libtermux-exec"*.so; do
+  [ -f "$_f" ] && TERMUX_LD_PRELOAD="$_f" && break
+done
+if [ -z "$TERMUX_LD_PRELOAD" ]; then
+  warn "libtermux-exec preload not found in $TERMUX_PREFIX/lib — some binaries may crash"
+fi
+
+# ── build environment ─────────────────────────────────────────────────────────
+# Source of truth in priority order:
+#   1. Live process /proc/<pid>/environ  (Termux is running — use its exact env)
+#   2. Construct from filesystem + getprop (Termux not running)
+#
+# We always override a small set of vars that must reflect the root→Termux
+# transition (HOME, SHELL, LD_PRELOAD, TERM) regardless of source.
+
+build_env_from_proc() {
+  # Read null-delimited environ, emit as VAR=val lines.
+  # Skip vars that must be overridden.
+  cat "/proc/${TERMUX_PID}/environ" 2>/dev/null \
+    | tr '\0' '\n' \
+    | grep -v '^$' \
+    | grep -vE '^(HOME|SHELL|TERM|TMPDIR|LD_PRELOAD|SHLVL|PWD|OLDPWD|SSH_|_=)' \
+    || return 1
 }
 
+build_env_from_fs() {
+  # Construct minimal but correct Termux environment from filesystem.
+  # PATH: only include dirs that actually exist (device-agnostic).
+  _path="${TERMUX_PREFIX}/bin"
+  for _dir in \
+    "${TERMUX_HOME}/.local/bin" \
+    "${TERMUX_HOME}/bin" \
+    "${TERMUX_HOME}/.local/share/cargo/bin" \
+    "${TERMUX_HOME}/.local/share/go/bin" \
+    "${TERMUX_PREFIX}/bin/applets" \
+    /system/bin /system/xbin
+  do
+    [ -d "$_dir" ] && _path="${_path}:${_dir}"
+  done
+
+  printf 'PATH=%s\n'              "$_path"
+  printf 'PREFIX=%s\n'            "$TERMUX_PREFIX"
+  printf 'TMPDIR=%s\n'            "${TERMUX_PREFIX}/tmp"
+  printf 'LD_LIBRARY_PATH=%s\n'   "${TERMUX_PREFIX}/lib"
+  printf 'LANG=%s\n'              "$(getprop persist.sys.locale 2>/dev/null || echo 'en_US.UTF-8')"
+  printf 'ANDROID_ROOT=%s\n'      "$(getprop ro.build.android.root 2>/dev/null || echo '/system')"
+  printf 'ANDROID_DATA=%s\n'      "/data"
+  printf 'EXTERNAL_STORAGE=%s\n'  "$(getprop ro.external.sd.path 2>/dev/null || echo '/sdcard')"
+  # XDG
+  printf 'XDG_CONFIG_HOME=%s\n'   "${TERMUX_HOME}/.config"
+  printf 'XDG_DATA_HOME=%s\n'     "${TERMUX_HOME}/.local/share"
+  printf 'XDG_CACHE_HOME=%s\n'    "${TERMUX_HOME}/.cache"
+  printf 'XDG_STATE_HOME=%s\n'    "${TERMUX_HOME}/.local/state"
+  printf 'XDG_RUNTIME_DIR=%s\n'   "${TERMUX_PREFIX}/tmp"
+  # Termux metadata vars
+  printf 'TERMUX__PREFIX=%s\n'    "$TERMUX_PREFIX"
+  printf 'TERMUX__HOME=%s\n'      "$TERMUX_HOME"
+  printf 'TERMUX__UID=%s\n'       "$TERMUX_UID"
+}
+
+# Collect env lines
+if [ -n "$TERMUX_PID" ] && ENV_LINES=$(build_env_from_proc); then
+  info "Environment sourced from live Termux process (pid $TERMUX_PID)"
+else
+  info "Termux not running — constructing environment from filesystem"
+  ENV_LINES=$(build_env_from_fs)
+fi
+
+# Always inject/override these regardless of source
+ENV_LINES="${ENV_LINES}
+HOME=${TERMUX_HOME}
+SHELL=${TERMUX_SHELL}
+TERM=${TERM:-xterm-256color}
+TMPDIR=${TERMUX_PREFIX}/tmp
+SHLVL=1"
+[ -n "$TERMUX_LD_PRELOAD" ] && ENV_LINES="${ENV_LINES}
+LD_PRELOAD=${TERMUX_LD_PRELOAD}"
+
 # ── parse args ────────────────────────────────────────────────────────────────
-MODE="interactive"   # interactive | cmd | exec
+
+MODE="interactive"
 CMD=""
 EXEC_BIN=""
 EXEC_ARGS=""
@@ -137,59 +323,50 @@ case "${1:-}" in
   -h|--help) usage ;;
   -c)
     [ -n "${2:-}" ] || die "-c requires an argument"
-    MODE="cmd"
-    CMD="$2"
+    MODE="cmd"; CMD="$2"
     ;;
   "")
     MODE="interactive"
     ;;
   *)
-    # txsu python3 script.py  →  exec python3 directly in Termux env
     MODE="exec"
-    # resolve binary: check Termux prefix bin first, then PATH
+    # resolve binary: Termux prefix first, then raw path
     if [ -x "${TERMUX_PREFIX}/bin/${1}" ]; then
       EXEC_BIN="${TERMUX_PREFIX}/bin/${1}"
     else
       EXEC_BIN="$1"
     fi
-    shift
-    EXEC_ARGS="$*"
+    shift; EXEC_ARGS="$*"
     ;;
 esac
 
-# ── build env string for /system/bin/env -i ───────────────────────────────────
-ENV_PAIRS=$(build_env)
+# ── exec chain ────────────────────────────────────────────────────────────────
+# runcon (SELinux) → su <uid> (drop privs) → env -i (clean env) → target
 
-# ── exec ──────────────────────────────────────────────────────────────────────
-# Chain: runcon (SELinux) → su <uid> (drop privs) → env -i (clean env) → shell/bin
-#
-# Note: we pass env pairs as positional args to `env -i`.
-# POSIX `env -i VAR=val ... cmd` is safe here; no subshell needed.
-
-run_with_context() {
+do_exec() {
   local _bin="$1"; shift
-  if command -v runcon >/dev/null 2>&1; then
+  if command -v runcon >/dev/null 2>&1 && [ -n "$SELINUX_CTX" ]; then
     exec runcon "$SELINUX_CTX" \
       /system/bin/su "$TERMUX_UID" \
-      /system/bin/env -i $ENV_PAIRS \
+      /system/bin/env -i $ENV_LINES \
       "$_bin" "$@"
   else
-    warn "runcon not available — SELinux context will not be switched"
+    [ -z "$SELINUX_CTX" ] && warn "No SELinux context — continuing without context switch"
     exec /system/bin/su "$TERMUX_UID" \
-      /system/bin/env -i $ENV_PAIRS \
+      /system/bin/env -i $ENV_LINES \
       "$_bin" "$@"
   fi
 }
 
 case "$MODE" in
   interactive)
-    info "Entering Termux shell as uid=$TERMUX_UID ctx=$SELINUX_CTX"
-    run_with_context "$TERMUX_SHELL" --login
+    info "uid=$TERMUX_UID shell=$TERMUX_SHELL ctx=$SELINUX_CTX"
+    do_exec "$TERMUX_SHELL" --login
     ;;
   cmd)
-    run_with_context "$TERMUX_SHELL" -c "$CMD"
+    do_exec "$TERMUX_SHELL" -c "$CMD"
     ;;
   exec)
-    run_with_context "$EXEC_BIN" $EXEC_ARGS
+    do_exec "$EXEC_BIN" $EXEC_ARGS
     ;;
 esac
