@@ -1,7 +1,7 @@
 # TermuxSu-Magisk
 
 <!-- VERSION_BADGE_START -->
-<img alt="Version" src="https://img.shields.io/badge/version-v2.0.2-7c3aed?style=flat-square&logo=github&logoColor=white">
+<img alt="Version" src="https://img.shields.io/badge/version-v2.0.1-7c3aed?style=flat-square&logo=github&logoColor=white">
 <!-- VERSION_BADGE_END -->
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
@@ -44,25 +44,25 @@ When you `su` into root on Android and try to run Termux commands, things silent
 
 **Magisk**
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.2/TermuxSu-Magisk-v2.0.2.zip && magisk --install-module /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.1/TermuxSu-Magisk-v2.0.1.zip && magisk --install-module /tmp/txsu.zip
 ```
 
 **KernelSU / ResuKiSU**
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.2/TermuxSu-Magisk-v2.0.2.zip && /data/adb/ksud module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.1/TermuxSu-Magisk-v2.0.1.zip && /data/adb/ksud module install /tmp/txsu.zip
 ```
 
 **APatch**
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.2/TermuxSu-Magisk-v2.0.2.zip && /data/adb/apd module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.1/TermuxSu-Magisk-v2.0.1.zip && /data/adb/apd module install /tmp/txsu.zip
 ```
 
 </td>
 <td valign="top" align="right" width="30%">
 <p align="right">
-<img alt="Version" src="https://img.shields.io/badge/v2.0.2-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
-<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-Magisk-v2.0.2.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
-<img alt="Code" src="https://img.shields.io/badge/version%20code-4-0891b2?style=for-the-badge">
+<img alt="Version" src="https://img.shields.io/badge/v2.0.1-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-Magisk-v2.0.1.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Code" src="https://img.shields.io/badge/version%20code-3-0891b2?style=for-the-badge">
 </p>
 </td>
 </tr>
@@ -159,6 +159,52 @@ at `$PREFIX/etc/resolv.conf`. `txsu` populates it from `getprop net.dns*` if emp
 | APatch | ✅ |
 
 Requires Android with Termux (`com.termux`) installed.
+
+---
+
+## SELinux Policy
+
+`txsu` ships a `sepolicy.rule` that allows the root manager domain to transition
+into the Termux app's SELinux domain (`untrusted_app_27` / `untrusted_app_25` /
+`untrusted_app`). This is required for `fwmarkd` to route network traffic correctly
+when the shell is running as the Termux UID.
+
+### Why it's needed
+
+Android's `fwmarkd` assigns network routing marks based on the **SELinux context**,
+not just the UID. Without the context switch, a shell running as `u0_a172` but
+with `u:r:ksu:s0` context gets misrouted traffic and loses network access inside
+the Termux shell.
+
+### Security note
+
+> ⚠️ This policy allows the root daemon (`ksu`, `magisk`) to transition into
+> **any** `untrusted_app` domain on the device — not only Termux's.
+>
+> In practice, if an attacker already has `ksu`/`magisk` context they are already
+> root, so this does not meaningfully expand the attack surface. However it does
+> weaken SELinux's defence-in-depth between the root domain and app domains.
+>
+> A stricter approach would constrain the transition to Termux's specific MLS
+> categories, but this is not supported cleanly in `sepolicy.rule` syntax.
+>
+> **Do not install this module on devices where you rely on SELinux as a
+> meaningful security boundary between root and apps.**
+
+Covered root manager domains:
+
+| Domain | Root manager |
+|---|---|
+| `u:r:magisk:s0` | Magisk, APatch |
+| `u:r:ksu:s0` | KernelSU, ResuKiSU |
+
+Covered Android SDK variants:
+
+| Type | SDK |
+|---|---|
+| `untrusted_app` | < 26 |
+| `untrusted_app_25` | 26–27 |
+| `untrusted_app_27` | ≥ 28 (frozen — covers Android 9 through 17+) |
 
 ---
 
