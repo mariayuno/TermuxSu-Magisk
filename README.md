@@ -507,27 +507,157 @@ process credentials:
 
 ### Hurdle 4 — `sudo` / `tsu`
 
-**The problem:** `sudo` and `tsu` inside the shell failed or behaved wrongly.
+`sudo` and `tsu` inside the shell failed or produced wrong behavior. This turned out to be caused by two compounding problems: a corrupted PATH and missing shell initialization, both stemming from how the shell was launched.
 
-**Root cause:** two things break `sudo` inside a shell obtained via a naive `su` drop:
+---
 
-1. **Wrong PATH** — if the root shell's `PATH` is inherited, `sudo` finds system `su` before `tsu`, or finds nothing in `$PREFIX/bin` at all. `sudo` itself may not be found.
-2. **Unset/stale `HOME` and `PREFIX`** — `sudo`'s env reset and Termux's own `sudo` wrapper both depend on these being correct. If `HOME` still points at `/root` or `PREFIX` is `(null)/usr`, `sudo` breaks its own environment reset.
+#### How a real Termux session initializes
 
-**What `txsu` does:** constructs PATH explicitly, `$PREFIX/bin` first, never inherited from root:
+When you open a Termux terminal normally, the session goes through:
 
-```sh
-export PATH="$PREFIX/bin:$PREFIX/bin/applets:/system/bin:/system/xbin:/system/sbin:/sbin:/sbin/bin"
+```
+Termux app (Java)
+      │
+      ▼
+pty creation
+      │
+      ▼
+$PREFIX/bin/login       ← Termux's own login wrapper
+      │
+      ├── sources $PREFIX/etc/termux/termux.env
+      │       → LD_PRELOAD, TERMUX__ vars, etc.
+      │
+      ├── selects user's configured shell
+      │
+      └── exec $SHELL -l -i   ← login + interactive
+                │
+                ├── sources .zprofile / .profile
+                ├── sources .zshrc
+                │       → user's custom PATH additions
+                │       → aliases, plugins, sudo config
+                │
+                └── ready shell ✅
 ```
 
-Sets `HOME`, `PREFIX`, `ZDOTDIR` before `zsh` starts so your `.zshrc` sees correct values and `sudo`/`tsu` work normally from inside the shell.
+The key insight: **Termux itself initializes Termux**. The environment — PATH, LD_PRELOAD, ZDOTDIR, all of it — comes from the user's own shell config files, not from the launcher.
+
+---
+
+#### What the old approach did wrong
+
+The old script tried to manufacture the entire environment in the launcher:
+
+```
+root launcher
+      │
+      ├── scan /proc/<pid>/environ   ← untrusted, may be stale
+      ├── build ENV_LINES string     ← unquoted, word-splits
+      │
+      ▼
+/system/bin/env -i $ENV_LINES \   ← expansion breaks multi-word values
+    $TERMUX_SHELL --login
+```
+
+**Problem 1 — PATH duplication:** The live Termux process already had a fully expanded PATH from `.zshrc` (with npm-global, mason, .local/bin, etc). That got copied into `ENV_LINES`. Then `zsh -l` sourced `.zshrc` again and appended those same paths again. Result:
+
+```
+PATH=/home/.npm-global/bin:/home/.npm-global/bin:/home/.npm-global/bin:...
+         ↑ triplicated because .zshrc ran 3x worth of PATH appends
+```
+
+**Problem 2 — No ZDOTDIR:** Without `ZDOTDIR` pointing at `~/.config/zsh`, zsh looked for `.zshrc` in `HOME`. If your zsh config lives under `.config/zsh/`, none of it loaded. `sudo` wasn't found, `tsu` wasn't found, nothing worked as expected.
+
+**Problem 3 — Stale PREFIX from root env:** If `PREFIX` was inherited from the root shell as `(null)/usr` (a known SSH/KSU artifact), `sudo` found the wrong binary locations, or none at all.
+
+**Problem 4 — Shell not launched as login:** `--login` vs `-l` matters to zsh. If the shell wasn't launched as a proper login shell, `.zprofile` didn't run, and path setup from profile-level config was skipped entirely.
+
+---
+
+#### The PATH duplication — live device evidence
+
+From the actual device test output, the bridged shell showed:
+
+```
+PATH=/data/data/com.termux/files/home/.npm-global/bin:
+     /data/data/com.termux/files/home/.local/share/nvim/mason/bin:
+     /data/data/com.termux/files/home/.local/bin:
+     /data/data/com.termux/files/home/bin:
+     /usr/local/bin:
+     /data/data/com.termux/files/home/.npm-global/bin:   ← duplicate
+     /data/data/com.termux/files/home/.local/share/nvim/mason/bin:
+     ...
+     /data/data/com.termux/files/home/.npm-global/bin:   ← triplicate
+```
+
+Every path segment from `.zshrc` appeared 3 times. This happened because the launcher copied the live env (which already had the expanded PATH), then `zsh -l` ran `.zshrc` again on top of it.
+
+---
+
+#### What `txsu` does instead
+
+Let Termux initialize itself. The launcher provides only the minimal bootstrap:
+
+```
+root shell
+      │
+      ├── stat → TUID, TGID
+      ├── stat → IGID (inet), SGID (storage)
+      │
+      ▼
+su -g $TGID -G $IGID -G $SGID $TUID /system/bin/sh -c '
+
+    NOW AT uid=10172, inside /system/bin/sh
+
+    │
+    ├── export HOME=$TERMUX_HOME        ← minimal bootstrap only
+    ├── export PREFIX=$TERMUX_PREFIX
+    ├── export ZDOTDIR=$HOME/.config/zsh  ← tells zsh where .zshrc lives
+    ├── export TMPDIR=$PREFIX/tmp
+    ├── export TERM=xterm-256color
+    ├── export LANG=en_US.UTF-8
+    │
+    ├── export PATH=$PREFIX/bin:$PREFIX/bin/applets:system paths
+    │           ↑ BASE PATH ONLY — no user additions yet
+    │           .zshrc will add npm-global, mason, etc. exactly once
+    │
+    ├── unset LD_LIBRARY_PATH
+    ├── export LD_PRELOAD=libtermux-exec-ld-preload.so
+    │
+    ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS / ART_ROOT / ...
+    ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
+    ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
+    ├── export SHELL=$PREFIX/bin/zsh
+    │
+    ├── cd $HOME
+    │
+    └── exec $PREFIX/bin/zsh -l -i
+                  │
+                  ├── -l → login shell → sources .zprofile
+                  ├── -i → interactive → sources .zshrc
+                  │
+                  └── .zshrc runs ONCE, adds custom PATH entries ONCE
+                              │
+                              └── sudo / tsu found in $PREFIX/bin ✅
+'
+```
+
+**Why `ZDOTDIR` explicitly:** If the user's zsh config is under `~/.config/zsh/` (XDG layout), zsh won't find it unless `ZDOTDIR` is set. Setting it in the launcher before `exec zsh` ensures `.zshrc` loads regardless of whether `HOME` is pointing somewhere unusual.
+
+**Why base PATH only:** Providing only `$PREFIX/bin` as the initial PATH means `.zshrc` adds its custom entries exactly once on top of a clean base. No duplication, no triplication.
+
+**Why `-l -i` together:** `-l` causes zsh to read `.zprofile` (login-level config, sets up environment). `-i` causes zsh to read `.zshrc` (interactive config, sets up prompt, aliases, PATH additions). Together they give an identical experience to opening a normal Termux terminal. Either one alone is insufficient.
+
+**Why `unset LD_LIBRARY_PATH` before `LD_PRELOAD`:** Root/KSU SSH sessions may carry `LD_LIBRARY_PATH` pointing at system library paths. If that leaks into Termux's zsh, the dynamic linker picks up wrong `.so` files before `libtermux-exec-ld-preload.so` can intercept. Clearing it first ensures the preload operates cleanly and Termux binaries find their own libraries via `DT_RUNPATH`.
+
+**Result:** `.zshrc` loads once, PATH is clean, `sudo` finds `tsu` in `$PREFIX/bin`, `tsu` escalates to root correctly.
 
 ```
 txsu shell (uid=10172)
-    │
-    └── sudo somecommand
-            │
-            └── tsu / /system/bin/su → root ✅
+      │
+      ├── sudo somecommand
+      │       └── tsu → /system/bin/su → uid=0 ✅
+      │
+      └── PATH: npm-global, mason, .local/bin — added once by .zshrc ✅
 ```
 
 ---
