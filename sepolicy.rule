@@ -1,0 +1,12 @@
+# TermuxSu-Magisk — SELinux policy rules
+# Allow root manager domains to transition into Termux app domain.
+# Covers: Magisk (magisk), KernelSU/ResuKiSU (ksu), APatch (magisk).
+# Covers all untrusted_app variants across Android SDK versions.
+
+allow magisk untrusted_app    process { transition dyntransition }
+allow magisk untrusted_app_25 process { transition dyntransition }
+allow magisk untrusted_app_27 process { transition dyntransition }
+
+allow ksu    untrusted_app    process { transition dyntransition }
+allow ksu    untrusted_app_25 process { transition dyntransition }
+allow ksu    untrusted_app_27 process { transition dyntransition }
