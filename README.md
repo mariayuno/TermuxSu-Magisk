@@ -24,6 +24,7 @@ txsu
 ## 📋 Table of Contents
 
 - [The Problem](#-the-problem)
+- [Try It Now](#-try-it-now--no-install-required)
 - [Install](#-install)
 - [Requirements](#-requirements)
 - [How It Works — Full Flowchart](#-how-it-works--full-flowchart)
@@ -55,25 +56,67 @@ You get a **broken impostor** that looks like one.
 
 ---
 
-## 📦 Install
+## ⚡ Try It Now — No Install Required
 
-This repo is the module source. There are no pre-built release zips — you build the flashable zip yourself from the directory structure:
+Run this in a **root shell** (SSH, ADB, or any root app) to try `txsu` without touching your system:
 
 ```sh
-# Clone the repo
+curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
+```
+
+This curls the script into `/tmp` and runs it directly. Nothing is written to your system. If it works, pick an install method below to make it permanent.
+
+---
+
+## 📦 Install
+
+### Method 1 — Magisk Module *(survives reboots, cleanest)*
+
+There are no pre-built release zips. Build the flashable zip yourself from the repo:
+
+```sh
+# On your PC or in Termux
 git clone https://github.com/mariayuno/TermuxSu-Magisk
 cd TermuxSu-Magisk
 
-# Zip it — files must be at the root of the zip, not inside a subfolder
+# Files must sit at the root of the zip, not inside a subfolder
 zip -r ../TermuxSu-Magisk.zip .
-
-# Transfer the zip to your device, then flash it in Magisk / KSU / APatch Manager:
-# Magisk app → Modules → Install from storage → select the zip → reboot
 ```
+
+Then transfer `TermuxSu-Magisk.zip` to your device and flash it:
+
+> **Magisk:** Magisk app → Modules tab → ➕ Install from storage → select the zip → Reboot
+>
+> **KernelSU / APatch:** same flow inside their respective manager apps
 
 After reboot, `txsu` is available from any root shell.
 
-> **Termux prerequisite:** you need at least one shell installed. Bash ships with Termux by default. `txsu` will use whatever shell you've configured via `chsh` in Termux.
+---
+
+### Method 2 — No-Flash Persistent Install *(no reboot needed)*
+
+Run this in a **root shell** to install `txsu` permanently into `/data/adb/` without flashing anything:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /data/adb/txsu && chmod 755 /data/adb/txsu
+```
+
+Then call it by full path each time, or add `/data/adb` to your root shell's PATH:
+
+```sh
+# Run directly
+/data/adb/txsu
+
+# Or add to PATH in your root shell's profile (e.g. /system/etc/mkshrc or ~/.bashrc as root)
+export PATH="/data/adb:$PATH"
+txsu
+```
+
+> `/data/adb/` persists across reboots and is not wiped by OTA updates. It is not on PATH by default — you either call it by full path or add it yourself.
+
+---
+
+> **Termux prerequisite:** at least one shell must be installed. Bash ships with Termux by default. `txsu` honours whatever shell you've configured with `chsh`.
 
 ---
 
