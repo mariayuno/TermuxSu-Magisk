@@ -1,50 +1,84 @@
-# TermuxSu — `txsu`
+<div align="center">
 
-Drop into a proper Termux shell from any root session (SSH, ADB, etc).
+# `txsu` — TermuxSu
+
+**Drop into a proper Termux shell from any root session.**
 
 ```sh
 txsu
 ```
 
+*SSH into your phone, ADB into it, su from another app — one command gives you your full configured Termux environment with correct identity, networking, storage, and shell initialization.*
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Android](https://img.shields.io/badge/Android-7%2B-green.svg)
+![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KSU%20%7C%20APatch-orange.svg)
+
+</div>
+
 ---
 
-## How it works
+## The Problem
+
+When you `su` to your Termux UID from a root session, you don't get a Termux shell. You get a broken shell that looks like one. Networking fails. `/sdcard` is inaccessible. `sudo` and `tsu` don't work. Your PATH is corrupted. Your `.zshrc` either doesn't load, or loads three times.
+
+The reason is that Android's framework does a lot of work when it launches an app through Zygote — assigning supplementary groups, initializing the environment, wiring up the resolver — and a bare `su <uid>` replicates none of it.
+
+`txsu` replicates what matters. Precisely, portably, and without security hacks.
+
+---
+
+## What `txsu` Does
 
 ```
-ROOT ENVIRONMENT
-      │
-      │  intentionally NOT inherited
-      ▼
-  ┌───────┐
-  │  txsu │
-  └───┬───┘
-      │  stat-based UID/GID detection
-      │  inet + storage supplementary groups
-      │  full Termux env constructed fresh
-      ▼
-  zsh -l -i  (your .zshrc, your PATH, sudo works)
+ROOT SESSION (SSH / ADB / another app)
+          │
+          │  environment NOT inherited
+          ▼
+      ┌───────┐
+      │  txsu │
+      └───┬───┘
+          │  stat-based UID/GID detection
+          │  inet + storage supplementary groups
+          │  complete Termux env constructed from scratch
+          ▼
+    zsh -l -i  ← your .zshrc, your PATH, sudo works
 ```
 
-`txsu` never inherits the root shell's environment. Every invocation:
+Every invocation:
 
-1. Detects Termux UID/GID via `stat` on the data directory — no hardcoding, no cache, no guessing
-2. Detects `inet` GID dynamically from `/dev/socket/dnsproxyd`
-3. Detects `storage` GID dynamically from `/storage`
-4. Constructs a clean env from scratch: `HOME`, `PREFIX`, `ZDOTDIR`, `PATH`, `TMPDIR`, all `ANDROID_*` and `TERMUX_*` vars
+1. Detects Termux `UID`/`GID` via `stat` on the data directory — no hardcoding, no caching
+2. Detects the `inet` GID dynamically from `/dev/socket/dnsproxyd`
+3. Detects the `storage` GID dynamically from `/storage`
+4. Builds a clean environment from scratch: `HOME`, `PREFIX`, `ZDOTDIR`, `PATH`, `TMPDIR`, all `ANDROID_*` and `TERMUX_*` vars
 5. Clears `LD_LIBRARY_PATH`, loads `libtermux-exec-ld-preload.so`
-6. `exec`s into `zsh -l -i` — a proper login shell so `.zshrc` runs
+6. `exec`s into `zsh -l -i` — a proper login shell so `.zshrc` runs exactly once
 
 ---
 
-## The four hurdles
+## Install
 
-## Hurdle 1 — Primary userspace shell & ownership
+Flash `TermuxSu-Magisk.zip` in Magisk / KernelSU / APatch, then run `txsu` from any root shell.
 
-This was the foundational problem. Getting a shell that actually *is* Termux — right UID, right groups, right env, right toolchain — from a root session.
+### Requirements
 
-### What Android actually does when Termux starts
+- Rooted device: Magisk, KernelSU, ResuKiSU, or APatch
+- Termux with zsh installed (`pkg install zsh`)
+- Android 7+
 
-When the Android framework launches Termux normally, it goes through Zygote:
+---
+
+## Design
+
+`txsu` was built by working through four distinct failure modes in existing approaches. Each hurdle below documents what was broken, why, and what the correct fix is.
+
+---
+
+### Hurdle 1 — Getting a shell that actually *is* Termux
+
+The foundational problem: getting a shell with the right UID, right groups, right env, and right toolchain, from a root session.
+
+#### What Android does when Termux starts normally
 
 ```
 Android Framework (ActivityManager)
@@ -53,623 +87,247 @@ Android Framework (ActivityManager)
          ▼
       Zygote
          │
-         ├── UID  = 10172  (u0_a172)
-         ├── GID  = 10172
+         ├── UID  = <termux uid>
+         ├── GID  = <termux gid>
          ├── supplementary groups = [ inet, sdcard_rw, ... ]
          ├── SELinux domain = untrusted_app_27
          ├── capabilities stripped
-         ├── secureexec
          └── env = framework-initialized
          │
          ▼
-   com.termux process
-         │
-         ▼
-   Termux terminal service
-         │
-         ▼
-   pty → zsh (inside PREFIX)
+   com.termux process → Termux terminal service → pty → zsh
 ```
 
 A root bridge has to approximate this from nothing, using only `su`.
 
----
+#### What naive approaches do wrong
 
-### What the old approach did (and why it failed)
-
-```
-root shell (u:r:ksu:s0)
-      │
-      ├─► read /proc/<pid>/environ   ← ① untrusted Termux process data
-      │         │
-      │         ▼
-      │   ENV_LINES="HOME=...\nPREFIX=..."
-      │         │
-      │         ▼
-      │   /system/bin/env -i $ENV_LINES   ← ② unquoted expansion
-      │         │ word splitting / glob expansion on untrusted data
-      │         ▼
-      │   read $PREFIX/etc/passwd    ← ③ Termux-writable file
-      │         │
-      │         ▼
-      │   TERMUX_SHELL=<shell path>
-      │         │
-      │         ▼
-      │   cache_write() →  TERMUX_SHELL=${TERMUX_SHELL}  ← ④ unquoted
-      │         │
-      │         ▼
-      │   /data/adb/txsu/cache
-      │         │
-      │         ▼  . "$CACHE_FILE"   ← ⑤ sourced as root shell code  🔴 RCE
-      │
-      ├─► runcon "$SELINUX_CTX" /system/bin/true  ← ⑥ weak probe
-      │         │ proves only `true` works, not the full chain
-      │         ▼
-      │   runcon → su $UID → env -i → shell   ← ⑦ order wrong
-      │
-      └─► su "$TERMUX_UID"   ← ⑧ no GID, no supplementary groups
-```
-
-**Failures at each numbered step:**
+Common implementations read `/proc/<pid>/environ` of a running Termux process, parse it into an env string, and pass it to `su`. This has multiple compounding failure modes:
 
 | # | Problem | Impact |
-|---|---|---|
+|---|---------|--------|
 | ① | `/proc/<pid>/environ` is attacker-controlled data | root reads untrusted input |
-| ② | `$ENV_LINES` unquoted → word splitting + glob | `FOO=hello world` becomes two args |
-| ③ | `$PREFIX/etc/passwd` is Termux-writable | shell path can be injected |
+| ② | Env string unquoted → word splitting + glob expansion | `FOO=hello world` becomes two args |
+| ③ | Shell path read from Termux-writable `passwd` file | shell path can be injected |
 | ④ | Cache written unquoted | `; payload` in shell name becomes shell syntax |
-| ⑤ | Cache sourced as root code | **Critical RCE** — Termux controls what root executes |
-| ⑥ | `runcon true` proves nothing about the real chain | false confidence |
-| ⑦ | SELinux transition before UID switch | transition order matters to kernel |
-| ⑧ | No `-g`, no `-G` | missing `inet`, `sdcard_rw`, storage groups → network + storage broken |
+| ⑤ | Cache sourced as root code | **RCE** — Termux controls what root executes |
+| ⑥ | `runcon true` used as a probe | proves nothing about the full chain |
+| ⑦ | SELinux transition before UID switch | transition order matters to the kernel |
+| ⑧ | `su <uid>` with no `-g`/`-G` flags | missing `inet`, `sdcard_rw` → network + storage broken |
 
----
+#### What `txsu` does
 
-### What `txsu` does instead
-
-The entire design is: **construct everything from verified integers, never source external data, never inherit root env.**
+The entire design principle: **construct everything from verified integers, never source external data, never inherit the root environment.**
 
 ```
-root shell (u:r:ksu:s0)
+root shell
       │
-      ├─► stat -c '%u' /data/data/com.termux   → TUID  (integer only)
-      ├─► stat -c '%g' /data/data/com.termux   → TGID  (integer only)
-      ├─► stat -c '%g' /dev/socket/dnsproxyd   → IGID  (inet group)
-      ├─► stat -c '%g' /storage                → SGID  (storage group)
+      ├── stat -c '%u' /data/data/com.termux    → TUID
+      ├── stat -c '%g' /data/data/com.termux    → TGID
+      ├── stat -c '%g' /dev/socket/dnsproxyd    → IGID (inet)
+      ├── stat -c '%g' /storage                 → SGID (storage)
       │
-      │   ┌─────────────────────────────────────┐
-      │   │  stat output = integers only        │
-      │   │  cannot contain shell syntax        │
-      │   │  no Termux filesystem involved      │
-      │   └─────────────────────────────────────┘
+      │   ┌──────────────────────────────────────┐
+      │   │  stat output = integers only         │
+      │   │  cannot contain shell metacharacters │
+      │   │  no Termux filesystem involved       │
+      │   └──────────────────────────────────────┘
       │
       ▼
-/system/bin/su
-    -g  $TGID          ← primary group = Termux GID
-    -G  $IGID          ← supplementary: inet  (network access)
-    -G  $SGID          ← supplementary: storage (sdcard access)
-    $TUID              ← UID switch
-    /system/bin/sh -c '
-        │
-        │  NOW INSIDE uid=10172 PROCESS
-        │  root env is GONE — sh -c starts clean
-        │
-        ├── export HOME=...          (hardcoded known path)
-        ├── export PREFIX=...        (hardcoded known path)
-        ├── export ZDOTDIR=...       (hardcoded known path)
-        ├── export PATH=PREFIX/bin:PREFIX/bin/applets:system paths
-        ├── export TMPDIR=...
-        ├── export TERM=xterm-256color
-        ├── export LANG=...
-        │
-        ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS
-        ├── export ANDROID_ART_ROOT / I18N_ROOT / TZDATA_ROOT
-        │
-        ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
-        ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
-        │
-        ├── export SHELL=$PREFIX/bin/zsh
-        ├── export EXTERNAL_STORAGE=/sdcard
-        │
-        ├── unset LD_LIBRARY_PATH    ← clear root linker state
-        ├── export LD_PRELOAD=$PREFIX/lib/libtermux-exec-ld-preload.so
-        │
-        ├── cd $HOME
-        │
-        └── exec $PREFIX/bin/zsh -l -i
-                  │
-                  │  login shell: sources .zprofile, .zshrc
-                  ▼
-              your Termux shell ✅
-    '
+/system/bin/su -g $TGID -G $IGID -G $SGID $TUID /system/bin/sh -c '
+      │
+      │  NOW INSIDE uid=<termux uid> PROCESS
+      │  root env is GONE — sh -c starts clean
+      │
+      ├── export HOME, PREFIX, ZDOTDIR, PATH, TMPDIR, TERM, LANG
+      ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS / ART_ROOT / ...
+      ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
+      ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
+      ├── export SHELL=$PREFIX/bin/zsh
+      ├── unset LD_LIBRARY_PATH
+      ├── export LD_PRELOAD=libtermux-exec-ld-preload.so
+      ├── cd $HOME
+      └── exec $PREFIX/bin/zsh -l -i    ✅
+'
 ```
 
----
+**Why `stat` for UID/GID:** `stat -c '%u'` returns a decimal integer. Integers cannot contain shell metacharacters. This eliminates the entire class of injection bugs from using `passwd`, `dumpsys`, `pm`, or process scanning.
 
-### Why each decision was made
+**Why `unset LD_LIBRARY_PATH`:** Root/KSU/SSH sessions may carry `LD_LIBRARY_PATH` pointing at system paths. If that survives into Termux's zsh, the dynamic linker picks up wrong `.so` files. Clearing it first ensures `libtermux-exec-ld-preload.so` operates cleanly.
 
-**`stat` for UID/GID detection** — `stat -c '%u'` returns a decimal integer. Integers cannot contain shell metacharacters. This eliminates the entire class of injection bugs from using `passwd`, `dumpsys`, `pm`, or process scanning.
-
-**`-g $TGID -G $IGID -G $SGID`** — `su <uid>` alone only switches the UID. It does not reconstruct the supplementary group membership that the Android framework gives a real app process. Without `inet` (GID of `dnsproxyd` socket), network sockets are blocked. Without `storage`, `/sdcard` is inaccessible. These GIDs are also detected via `stat` — not hardcoded — so they work across all devices.
-
-**`/system/bin/sh -c '...'`** — The env is constructed inside a double-quoted heredoc-style `-c` string, with all paths baked in at the outer (root) script level. The inner shell never reads any Termux file before the `exec`. There is no cache, no sourced file, no variable inherited from root.
-
-**`unset LD_LIBRARY_PATH` before `LD_PRELOAD`** — Root shells (especially KSU/SSH sessions) may carry `LD_LIBRARY_PATH` pointing at system paths. If that survives into Termux's zsh, the dynamic linker picks up wrong `.so` files. Clearing it first ensures `libtermux-exec-ld-preload.so` operates cleanly.
-
-**`exec zsh -l -i`** — `-l` makes it a login shell (reads `.zprofile`). `-i` makes it interactive (reads `.zshrc`). Together they give you your full configured Termux environment including your custom PATH, aliases, plugins, and `sudo`/`tsu` working correctly.
-
-**No `runcon`** — the old approach used `runcon` to try to match Termux's SELinux domain. This was solving the wrong problem (see Hurdle 2). `txsu` skips it entirely. The shell runs as `u:r:ksu:s0` or `u:r:magisk:s0` and that is fine for UID-based operations.
+**Why `exec zsh -l -i`:** `-l` makes it a login shell (reads `.zprofile`). `-i` makes it interactive (reads `.zshrc`). Together they give a full configured Termux environment — custom PATH, aliases, plugins, and `sudo`/`tsu` working correctly.
 
 ---
 
 ### Hurdle 2 — Internet
 
-This was the most misdiagnosed problem. The old implementation had an entire networking subsystem built on a wrong premise, and the real fix turned out to be two lines.
+This was the most misdiagnosed problem in prior implementations. The old fix was a `runcon` call to switch SELinux domains. That reasoning is wrong.
 
----
-
-#### What Android's networking stack actually does
-
-When any process makes a socket call, the kernel routes it through `netd` via the fwmark mechanism:
+#### How Android's network stack actually works
 
 ```
 process calls connect() / getaddrinfo()
               │
               ▼
-       ┌─────────────────────────────────────┐
-       │  Does this domain have permission   │
-       │  to reach /dev/socket/fwmarkd ?     │  ← SELinux check (netdomain)
-       │  to reach /dev/socket/dnsproxyd ?   │
-       └─────────────┬───────────────────────┘
-                     │ yes
-                     ▼
-              FwmarkServer (netd)
-                     │
-                     │  getNetworkForConnect(client->getUid())
-                     │                            ▲
-                     │                            │ UID — not SELinux domain
-                     ▼
-              NetworkController
-                     │
-                     │  selects NetId from UID/network policy
-                     │  (VPN applicability, per-UID network rules)
-                     ▼
-              correct network route + DNS
+       ┌──────────────────────────────────────────┐
+       │  Does this process have permission to    │
+       │  reach /dev/socket/fwmarkd ?             │  ← SELinux check (netdomain)
+       │  reach /dev/socket/dnsproxyd ?           │
+       └──────────────────┬───────────────────────┘
+                          │ yes
+                          ▼
+                   FwmarkServer (netd)
+                          │
+                          │  getNetworkForConnect(client->getUid())
+                          │                              ↑
+                          │                       UID — not SELinux domain
+                          ▼
+                   correct network route + DNS
 ```
 
-**Source:** AOSP `FwmarkServer.cpp` (android-14 tag): `getNetworkForConnect(client->getUid())` — the routing decision is UID-based. SELinux only gates whether the process can *talk to* `fwmarkd` and `dnsproxyd` at all, via the `netdomain` attribute in `net.te`.
+The routing decision in `FwmarkServer.cpp` is UID-based. SELinux only gates whether the process can *open the socket at all* — via the `netdomain` attribute. These are two separate checks.
 
----
+#### Why `runcon` was the wrong fix
 
-#### What the old approach believed (and why it was wrong)
+`runcon untrusted_app_27` switches the SELinux domain, which unblocks socket access on builds where `ksu` lacked `netdomain`. But it was solving the access problem while misidentifying the root cause as a routing problem. On current KernelSU, `ksu` explicitly has `netdomain` in `kernel/selinux/rules.c` — `runcon` is entirely unnecessary.
 
-The old `txsu` claimed:
+The real problem was always simpler: the process was missing the `inet` supplementary group.
 
-> `fwmarkd` routes based on the SELinux context, not just UID.
+```sh
+# Proven live on device:
 
-And built this as the fix:
+# UID only — fails
+su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
+# → PermissionError(13, 'Permission denied')   ← DAC failure, not SELinux
 
-```
-root shell (u:r:ksu:s0)
-      │
-      │  runcon "$SELINUX_CTX" ...    ← switch to untrusted_app_27
-      ▼
-u:r:untrusted_app_27:s0
-      │
-      │  /system/bin/su $TERMUX_UID
-      ▼
-uid=10172 + untrusted_app_27 context
-      │
-      ▼
-fwmarkd  ← "now it works because we have the right SELinux context"
+# UID + inet group — works
+su -g 10172 -G 3003 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
+# → SUCCESS; getaddrinfo("example.com") → [('172.66.147.243', ...)]
 ```
 
-**Why that reasoning is wrong:** `fwmarkd` doesn't care about your SELinux domain for *routing*. It cares only for *access* — can you open the socket at all. The routing is purely UID-based. What the old approach accidentally fixed was the `netdomain` permission gap: `ksu` on some builds lacked permission to reach `fwmarkd`/`dnsproxyd`, and impersonating `untrusted_app_27` (which has `netdomain`) worked around it.
+`/dev/socket/dnsproxyd` is `gid=<inet> mode=660`. Without that group, the process can't open the socket. One supplementary group. No SELinux change.
 
-Current upstream KernelSU explicitly grants `ksu` the `netdomain` attribute in `kernel/selinux/rules.c` — so on stock KSU/ResuKiSU the `runcon` workaround is entirely unnecessary.
+#### What `txsu` does
 
----
+Deletes the entire networking subsystem — no `resolv.conf` writing, no `getprop`, no interface scanning, no `runcon`. Adds the `inet` GID detected dynamically:
 
-#### The DNS subsystem was also completely broken
-
-On top of the wrong SELinux premise, the old approach had a fake DNS implementation:
-
-```
-OLD APPROACH — fake DNS pipeline:
-
-getprop net.dns1          ← system property, often stale/empty
-getprop net.dns2
-getprop dhcp.wlan0.dns1   ← hardcoded interface names
-getprop dhcp.eth0.dns1    ← wlan0, eth0, rmnet0, rmnet_data0 only
-grep '^nameserver' /proc/net/pnp  ← legacy Linux interface
-         │
-         ▼
-write $PREFIX/etc/resolv.conf
-         │
-         ▼  "DNS populated from system properties" ✓ (printed)
-         │
-         ▼
-app calls getaddrinfo()
-         │
-         ▼
-Android libc resolver
-         │
-         ▼  reads Android's internal resolver state
-         │  NOT $PREFIX/etc/resolv.conf   ← file is ignored
-         │
-         ▼
-DNS works or fails based on UID/netd state alone
+```sh
+IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
+# → the GID of the socket that inet access gates
+# → works on all devices, all Android versions
 ```
 
-**Three compounding failures:**
+**Why not copy all real Termux groups:** A real Termux process has 5 supplementary groups. Two matter for a shell session: `inet` (network) and `storage` (sdcard). `stat`-based detection of those two is more portable — it doesn't require a live Termux process.
 
-| Failure | Detail |
-|---|---|
-| Wrong consumer | Modern Android (Python, curl in Termux) uses Android's bionic resolver via `dnsproxyd`, not `/etc/resolv.conf`. The file is irrelevant. |
-| Stale on network change | The file was only written when empty. Switch from Wi-Fi → mobile → VPN → Private DNS: the file never updates, while Android's resolver state changes dynamically. |
-| Wrong interface names | `wlan0`, `eth0`, `rmnet0`, `rmnet_data0` are hardcoded. Modern devices use `wlan1`, `rmnet_data1`, `ccmni0`, `v4-rmnet...`, etc. Even when they exist, the DNS for an interface isn't necessarily the DNS for a given UID at that moment. |
-
----
-
-#### What `txsu` does instead
-
-The entire networking implementation is **deleted**. No `resolv.conf` writing, no `getprop`, no interface scanning, no `runcon`.
-
-The fix is two `stat` calls:
-
-```
-txsu startup
-      │
-      ├── IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
-      │              ▲
-      │              └── GID of the dnsproxyd socket
-      │                  = the Android "inet" group
-      │                  detected dynamically, works on all devices
-      │
-      ├── SGID=$(stat -c '%g' /storage)
-      │
-      ▼
-/system/bin/su
-    -G $IGID       ← add inet supplementary group
-    -G $SGID       ← add storage supplementary group
-    $TUID
-    /system/bin/sh -c '... exec zsh -l -i'
-              │
-              ▼
-    process credentials:
-      uid  = 10172
-      gid  = 10172
-      groups = [ 10172, $IGID, $SGID ]
-              │
-              ▼
-    connect() / getaddrinfo()
-              │
-              ▼
-    fwmarkd: client has inet group → socket allowed
-    netd:    getNetworkForConnect(10172) → correct network
-    dnsproxyd: uid=10172 → correct DNS resolver state
-              │
-              ▼
-    internet works ✅
-```
-
-**Why `stat` on the socket:** the `inet` group GID is not a fixed number across all Android devices and versions. `stat -c '%g' /dev/socket/dnsproxyd` reads it directly from the socket that the group is meant to grant access to — self-documenting, device-agnostic, always correct.
-
-**Why not `runcon`:** the `netdomain` SELinux permission is already present in `ksu` on current KSU/ResuKiSU. If a custom build lacked it, the correct fix would be a `sepolicy.rule`, not impersonating an app domain at runtime.
-
-**Why no `resolv.conf`:** Android's resolver bypasses it entirely. Termux processes using Python, curl, wget, git all go through bionic's `getaddrinfo()` → `dnsproxyd`. The correct DNS state flows automatically once the process has the right UID and `inet` group.
+**Why no `resolv.conf`:** Android's resolver bypasses it entirely. Termux processes using Python, curl, wget, git all go through bionic's `getaddrinfo()` → `dnsproxyd`. DNS state flows automatically once the process has the right UID and `inet` group.
 
 ---
 
 ### Hurdle 3 — Internal storage access
 
-Storage access was broken in a way that was completely misdiagnosed. The old approach tried to patch DNS config files. The real problem was a single missing supplementary group, proven live on device.
-
----
+Storage access failure was also misdiagnosed. The old approach tried patching `resolv.conf`. The real problem was a different missing supplementary group.
 
 #### How Android grants storage access to apps
 
-When the Android framework creates an app process through Zygote, it explicitly assigns supplementary groups from the app's credential spec:
+Zygote assigns supplementary groups explicitly when forking an app process:
 
 ```
-Android Framework
-      │
-      ▼
 Zygote fork (for com.termux)
-      │
-      ├── uid  = 10172
-      ├── gid  = 10172
+      ├── uid  = <termux uid>
+      ├── gid  = <termux gid>
       └── supplementary groups:
             1077   → log
             3003   → inet         (network socket access)
             9997   → everybody    (shared storage)
-           20172   → u0_a172_cache
-           50172   → all_a172     (app-specific external storage)
+           20xxx   → u0_aXXX_cache
+           50xxx   → all_aXXX     (app-specific external storage)
 ```
 
-The `everybody` group (9997) and `all_a172` group (50172) are what give the app process read/write access to `/sdcard` and `/storage/emulated/0`. These are enforced at the FUSE/sdcardfs layer — not just by filesystem permissions, but by the storage daemon checking group membership.
+The `everybody` (9997) and per-app groups give the process access to `/sdcard` and `/storage/emulated/0`. These are enforced at the FUSE layer — the storage daemon checks group membership, not just UID.
 
----
-
-#### What the old approach did wrong
-
-A plain `su <uid>` gives you **only** the UID. No supplementary groups from the framework:
+A plain `su <uid>` gives you only the UID. No supplementary groups:
 
 ```
-root shell
-      │
-      ▼
-su 10172
-      │
-      ▼
-uid=10172  gid=10172  groups=10172   ← only primary group
-      │
-      ├── /sdcard          ❌  FUSE daemon checks everybody/all_a172
-      ├── /storage/emulated/0   ❌  same
-      └── /dev/socket/dnsproxyd ❌  needs inet (3003), mode 0660 gid=3003
+uid=10172  gid=10172  groups=10172
+
+      ├── /sdcard              ❌  FUSE checks everybody/storage group
+      ├── /storage/emulated/0  ❌  same
+      └── /dev/socket/dnsproxyd ❌  needs inet, mode 0660 gid=inet
 ```
-
-The old `txsu` tried to fix networking by writing `/etc/resolv.conf` and switching SELinux domains. It never identified the missing supplementary groups as the root cause — because it was looking at the wrong layer entirely.
-
-The old DNS "fix" was also mutating the user's Termux installation from root:
-
-```
-root process
-      │
-      └── writes /data/data/com.termux/files/usr/etc/resolv.conf
-                  ▲
-                  └── app-controlled filesystem
-                      root should never touch this
-```
-
----
-
-#### The live proof — what actually happened on device
-
-This was proven empirically. First, reading the real Termux process's credential state:
-
-```
-REAL TERMUX PROCESS (PID 10938):
-  /dev/socket/dnsproxyd → uid=0  gid=3003  mode=660
-
-  Real Termux groups:   1077  3003  9997  20172  50172
-  Synthetic su groups:  10172  (only)
-                          ↑
-                          missing all of these
-```
-
-**Test: UID only → dnsproxyd**
-```
-su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
-
-  DNSPROXYD CONNECT: FAIL: PermissionError(13, 'Permission denied')
-  getaddrinfo("example.com"): FAIL
-```
-
-No AVC in logcat — this is a **DAC failure** (discretionary access control, plain Unix permissions), not SELinux. The socket is `gid=3003 mode=660`. The process has no group 3003.
-
-**Test: UID + inet group (3003) → dnsproxyd**
-```
-su -g 10172 -G 3003 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
-
-  DNSPROXYD CONNECT: SUCCESS
-  getaddrinfo("example.com"): [('172.66.147.243', 443), ...]
-```
-
-One group. That's it. No SELinux change. No `resolv.conf`. No `runcon`.
-
----
 
 #### What `txsu` does
 
-Detect all required GIDs dynamically via `stat`, never hardcoded:
+Detects the storage GID dynamically and passes it as a supplementary group:
 
-```
-txsu startup
-      │
-      ├── TGID=$(stat -c '%g' /data/data/com.termux)
-      │         → primary group = Termux GID
-      │
-      ├── IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
-      │         → inet group = GID of the dnsproxyd socket itself
-      │           currently 3003 on your device, but detected live
-      │
-      ├── SGID=$(stat -c '%g' /storage)
-      │         → storage group = GID of /storage mount point
-      │           gates FUSE/sdcardfs access
-      │
-      ▼
-/system/bin/su
-    -g  $TGID          ← primary group
-    -G  $IGID          ← supplementary: inet  → dnsproxyd access → DNS/network
-    -G  $SGID          ← supplementary: storage → /sdcard, /storage access
-    $TUID
-      │
-      ▼
-process credentials:
-    uid    = 10172
-    gid    = 10172
-    groups = [ 10172, $IGID, $SGID ]
-      │
-      ├── /dev/socket/dnsproxyd  ← gid matches IGID → access granted ✅
-      │         → Android resolver → DNS works ✅
-      │
-      └── /storage, /sdcard      ← gid matches SGID → FUSE grants access ✅
+```sh
+SGID=$(stat -c '%g' /storage)
+# → GID of the /storage mount point
+# → what FUSE/sdcardfs checks for access
 ```
 
-**Why `stat` on the socket and mount point:** GIDs are not fixed across devices, Android versions, or custom ROMs. Reading the GID directly from the resource being accessed means the detection is always correct and self-documenting — the inet group is the group that owns `dnsproxyd`, the storage group is the group that owns `/storage`.
+**Why `stat` on the mount point:** The storage GID is not fixed across Android versions and custom ROMs. Reading it from `/storage` itself means the detection is always correct and self-documenting.
 
-**Why not copy all real Termux groups:** The real Termux process has 5 supplementary groups (`1077 3003 9997 20172 50172`). We could copy them all, but `stat`-based detection of the two that matter (inet, storage) is more portable — it doesn't depend on a live Termux process being present, and it doesn't copy groups whose purpose is unknown or irrelevant to the shell session.
-
-**Result:** `/sdcard` read/write works, DNS works, `curl`/`wget`/`git`/`pip` all work — with no SELinux manipulation, no `resolv.conf` writing, no process scanning.
+**Result:** `/sdcard` read/write works. `curl`, `wget`, `git`, `pip` all work. No SELinux manipulation. No `resolv.conf`. No process scanning.
 
 ---
 
 ### Hurdle 4 — `sudo` / `tsu`
 
-`sudo` and `tsu` inside the shell failed or produced wrong behavior. This turned out to be caused by two compounding problems: a corrupted PATH and missing shell initialization, both stemming from how the shell was launched.
+`sudo` and `tsu` inside the bridged shell failed or behaved incorrectly. Two compounding problems: a corrupted PATH and missing shell initialization.
+
+#### What the naive approach does to PATH
+
+Reading a live Termux process's environment captures its already-expanded PATH — one that `.zshrc` has already built up with custom entries. Then launching `zsh -l` runs `.zshrc` again and appends those same paths on top. The result:
+
+```
+PATH=/prefix/bin:~/.npm-global/bin:~/.local/bin:   ← from live env
+     ~/.npm-global/bin:~/.local/bin:               ← .zshrc ran again
+     ~/.npm-global/bin:~/.local/bin:               ← and again
+```
+
+Every custom path segment triplicated. `sudo` finds the wrong binary, or an ambiguous one, or fails entirely.
+
+#### Missing ZDOTDIR
+
+Without `ZDOTDIR` pointing at `~/.config/zsh`, zsh looks for `.zshrc` in `HOME`. If the user's zsh config follows XDG layout under `.config/zsh/`, none of it loads. `sudo` isn't found. Custom tools aren't found. Nothing works as expected.
+
+#### What `txsu` does
+
+Provide only a **base PATH** in the launcher. Let `.zshrc` do its job exactly once.
+
+```
+txsu launcher provides:
+      PATH = $PREFIX/bin:$PREFIX/bin/applets:system paths
+                ↑ base only — no user additions
+
+zsh -l -i runs:
+      .zprofile  → login-level setup
+      .zshrc     → adds npm-global, mason, .local/bin — ONCE
+
+Result:
+      PATH = $PREFIX/bin:~/.npm-global/bin:~/.local/bin:...
+               ↑ clean, no duplicates
+```
+
+**Why `ZDOTDIR` explicitly:** Set before `exec zsh` so that `.zshrc` loads from the correct XDG location regardless of how `HOME` is configured.
+
+**Why `-l -i` together:** `-l` triggers `.zprofile` (login-level env setup). `-i` triggers `.zshrc` (interactive config, aliases, PATH additions, plugins). Either alone is insufficient. Together they produce an experience identical to opening a normal Termux terminal.
+
+**Result:** `.zshrc` loads once, PATH is clean, `sudo` resolves to `tsu` in `$PREFIX/bin`, `tsu` escalates to root correctly.
 
 ---
 
-#### How a real Termux session initializes
+## Security Notes
 
-When you open a Termux terminal normally, the session goes through:
-
-```
-Termux app (Java)
-      │
-      ▼
-pty creation
-      │
-      ▼
-$PREFIX/bin/login       ← Termux's own login wrapper
-      │
-      ├── sources $PREFIX/etc/termux/termux.env
-      │       → LD_PRELOAD, TERMUX__ vars, etc.
-      │
-      ├── selects user's configured shell
-      │
-      └── exec $SHELL -l -i   ← login + interactive
-                │
-                ├── sources .zprofile / .profile
-                ├── sources .zshrc
-                │       → user's custom PATH additions
-                │       → aliases, plugins, sudo config
-                │
-                └── ready shell ✅
-```
-
-The key insight: **Termux itself initializes Termux**. The environment — PATH, LD_PRELOAD, ZDOTDIR, all of it — comes from the user's own shell config files, not from the launcher.
-
----
-
-#### What the old approach did wrong
-
-The old script tried to manufacture the entire environment in the launcher:
-
-```
-root launcher
-      │
-      ├── scan /proc/<pid>/environ   ← untrusted, may be stale
-      ├── build ENV_LINES string     ← unquoted, word-splits
-      │
-      ▼
-/system/bin/env -i $ENV_LINES \   ← expansion breaks multi-word values
-    $TERMUX_SHELL --login
-```
-
-**Problem 1 — PATH duplication:** The live Termux process already had a fully expanded PATH from `.zshrc` (with npm-global, mason, .local/bin, etc). That got copied into `ENV_LINES`. Then `zsh -l` sourced `.zshrc` again and appended those same paths again. Result:
-
-```
-PATH=/home/.npm-global/bin:/home/.npm-global/bin:/home/.npm-global/bin:...
-         ↑ triplicated because .zshrc ran 3x worth of PATH appends
-```
-
-**Problem 2 — No ZDOTDIR:** Without `ZDOTDIR` pointing at `~/.config/zsh`, zsh looked for `.zshrc` in `HOME`. If your zsh config lives under `.config/zsh/`, none of it loaded. `sudo` wasn't found, `tsu` wasn't found, nothing worked as expected.
-
-**Problem 3 — Stale PREFIX from root env:** If `PREFIX` was inherited from the root shell as `(null)/usr` (a known SSH/KSU artifact), `sudo` found the wrong binary locations, or none at all.
-
-**Problem 4 — Shell not launched as login:** `--login` vs `-l` matters to zsh. If the shell wasn't launched as a proper login shell, `.zprofile` didn't run, and path setup from profile-level config was skipped entirely.
-
----
-
-#### The PATH duplication — live device evidence
-
-From the actual device test output, the bridged shell showed:
-
-```
-PATH=/data/data/com.termux/files/home/.npm-global/bin:
-     /data/data/com.termux/files/home/.local/share/nvim/mason/bin:
-     /data/data/com.termux/files/home/.local/bin:
-     /data/data/com.termux/files/home/bin:
-     /usr/local/bin:
-     /data/data/com.termux/files/home/.npm-global/bin:   ← duplicate
-     /data/data/com.termux/files/home/.local/share/nvim/mason/bin:
-     ...
-     /data/data/com.termux/files/home/.npm-global/bin:   ← triplicate
-```
-
-Every path segment from `.zshrc` appeared 3 times. This happened because the launcher copied the live env (which already had the expanded PATH), then `zsh -l` ran `.zshrc` again on top of it.
-
----
-
-#### What `txsu` does instead
-
-Let Termux initialize itself. The launcher provides only the minimal bootstrap:
-
-```
-root shell
-      │
-      ├── stat → TUID, TGID
-      ├── stat → IGID (inet), SGID (storage)
-      │
-      ▼
-su -g $TGID -G $IGID -G $SGID $TUID /system/bin/sh -c '
-
-    NOW AT uid=10172, inside /system/bin/sh
-
-    │
-    ├── export HOME=$TERMUX_HOME        ← minimal bootstrap only
-    ├── export PREFIX=$TERMUX_PREFIX
-    ├── export ZDOTDIR=$HOME/.config/zsh  ← tells zsh where .zshrc lives
-    ├── export TMPDIR=$PREFIX/tmp
-    ├── export TERM=xterm-256color
-    ├── export LANG=en_US.UTF-8
-    │
-    ├── export PATH=$PREFIX/bin:$PREFIX/bin/applets:system paths
-    │           ↑ BASE PATH ONLY — no user additions yet
-    │           .zshrc will add npm-global, mason, etc. exactly once
-    │
-    ├── unset LD_LIBRARY_PATH
-    ├── export LD_PRELOAD=libtermux-exec-ld-preload.so
-    │
-    ├── export ANDROID_ROOT / DATA / STORAGE / ASSETS / ART_ROOT / ...
-    ├── export TERMUX__ROOTFS_DIR / HOME / PREFIX / UID / USER_ID
-    ├── export TERMUX_APP__PACKAGE_NAME / DATA_DIR
-    ├── export SHELL=$PREFIX/bin/zsh
-    │
-    ├── cd $HOME
-    │
-    └── exec $PREFIX/bin/zsh -l -i
-                  │
-                  ├── -l → login shell → sources .zprofile
-                  ├── -i → interactive → sources .zshrc
-                  │
-                  └── .zshrc runs ONCE, adds custom PATH entries ONCE
-                              │
-                              └── sudo / tsu found in $PREFIX/bin ✅
-'
-```
-
-**Why `ZDOTDIR` explicitly:** If the user's zsh config is under `~/.config/zsh/` (XDG layout), zsh won't find it unless `ZDOTDIR` is set. Setting it in the launcher before `exec zsh` ensures `.zshrc` loads regardless of whether `HOME` is pointing somewhere unusual.
-
-**Why base PATH only:** Providing only `$PREFIX/bin` as the initial PATH means `.zshrc` adds its custom entries exactly once on top of a clean base. No duplication, no triplication.
-
-**Why `-l -i` together:** `-l` causes zsh to read `.zprofile` (login-level config, sets up environment). `-i` causes zsh to read `.zshrc` (interactive config, sets up prompt, aliases, PATH additions). Together they give an identical experience to opening a normal Termux terminal. Either one alone is insufficient.
-
-**Why `unset LD_LIBRARY_PATH` before `LD_PRELOAD`:** Root/KSU SSH sessions may carry `LD_LIBRARY_PATH` pointing at system library paths. If that leaks into Termux's zsh, the dynamic linker picks up wrong `.so` files before `libtermux-exec-ld-preload.so` can intercept. Clearing it first ensures the preload operates cleanly and Termux binaries find their own libraries via `DT_RUNPATH`.
-
-**Result:** `.zshrc` loads once, PATH is clean, `sudo` finds `tsu` in `$PREFIX/bin`, `tsu` escalates to root correctly.
-
-```
-txsu shell (uid=10172)
-      │
-      ├── sudo somecommand
-      │       └── tsu → /system/bin/su → uid=0 ✅
-      │
-      └── PATH: npm-global, mason, .local/bin — added once by .zshrc ✅
-```
-
----
-
-## Requirements
-
-- Rooted device: Magisk, KernelSU, ResuKiSU, or APatch
-- Termux installed with zsh (`pkg install zsh`)
-- Android 7+
+- All UID/GID values are obtained via `stat` — integer output only, immune to injection
+- No external files are read or sourced during escalation
+- No environment is inherited from the root shell
+- No Termux filesystem is touched before the `exec`
+- No SELinux domain switching
+- No cache files
 
 ---
 
 ## License
 
-MIT © mariayuno
+MIT
