@@ -3,4 +3,4 @@ name=TermuxSu
 version=v4.0.0
 versionCode=400
 author=mariayuno
-description=Drop into a proper Termux shell from any root session
+description=Full Termux shell from any root session. Correct UID, groups, env, LD_PRELOAD. No SELinux hacks.
