@@ -363,19 +363,145 @@ txsu startup
 
 ### Hurdle 3 — Internal storage access
 
-**The problem:** `/sdcard`, `/storage/emulated/0`, and related paths were inaccessible inside the shell.
+Storage access was broken in a way that was completely misdiagnosed. The old approach tried to patch DNS config files. The real problem was a single missing supplementary group, proven live on device.
 
-**Root cause:** Android gates storage access on the **storage supplementary group** (the GID of `/storage`). A plain `su <uid>` drop doesn't reconstruct supplementary groups — it gives you only the primary UID/GID. The supplementary group membership that a real Android app process has from the framework/zygote is absent.
+---
 
-**What `txsu` does:** detects the storage GID dynamically:
+#### How Android grants storage access to apps
 
-```sh
-SGID=$(stat -c '%g' /storage)
+When the Android framework creates an app process through Zygote, it explicitly assigns supplementary groups from the app's credential spec:
+
+```
+Android Framework
+      │
+      ▼
+Zygote fork (for com.termux)
+      │
+      ├── uid  = 10172
+      ├── gid  = 10172
+      └── supplementary groups:
+            1077   → log
+            3003   → inet         (network socket access)
+            9997   → everybody    (shared storage)
+           20172   → u0_a172_cache
+           50172   → all_a172     (app-specific external storage)
 ```
 
-and passes it via `su -G $SGID`. Both `inet` and `storage` are added as supplementary groups alongside the primary Termux GID.
+The `everybody` group (9997) and `all_a172` group (50172) are what give the app process read/write access to `/sdcard` and `/storage/emulated/0`. These are enforced at the FUSE/sdcardfs layer — not just by filesystem permissions, but by the storage daemon checking group membership.
 
-The old approach tried to fix this by writing to `/data/data/com.termux/files/usr/etc/resolv.conf` from root — mutating the user's Termux installation. That's wrong in both direction (root shouldn't touch app files) and mechanism (DNS resolution isn't the storage problem).
+---
+
+#### What the old approach did wrong
+
+A plain `su <uid>` gives you **only** the UID. No supplementary groups from the framework:
+
+```
+root shell
+      │
+      ▼
+su 10172
+      │
+      ▼
+uid=10172  gid=10172  groups=10172   ← only primary group
+      │
+      ├── /sdcard          ❌  FUSE daemon checks everybody/all_a172
+      ├── /storage/emulated/0   ❌  same
+      └── /dev/socket/dnsproxyd ❌  needs inet (3003), mode 0660 gid=3003
+```
+
+The old `txsu` tried to fix networking by writing `/etc/resolv.conf` and switching SELinux domains. It never identified the missing supplementary groups as the root cause — because it was looking at the wrong layer entirely.
+
+The old DNS "fix" was also mutating the user's Termux installation from root:
+
+```
+root process
+      │
+      └── writes /data/data/com.termux/files/usr/etc/resolv.conf
+                  ▲
+                  └── app-controlled filesystem
+                      root should never touch this
+```
+
+---
+
+#### The live proof — what actually happened on device
+
+This was proven empirically. First, reading the real Termux process's credential state:
+
+```
+REAL TERMUX PROCESS (PID 10938):
+  /dev/socket/dnsproxyd → uid=0  gid=3003  mode=660
+
+  Real Termux groups:   1077  3003  9997  20172  50172
+  Synthetic su groups:  10172  (only)
+                          ↑
+                          missing all of these
+```
+
+**Test: UID only → dnsproxyd**
+```
+su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
+
+  DNSPROXYD CONNECT: FAIL: PermissionError(13, 'Permission denied')
+  getaddrinfo("example.com"): FAIL
+```
+
+No AVC in logcat — this is a **DAC failure** (discretionary access control, plain Unix permissions), not SELinux. The socket is `gid=3003 mode=660`. The process has no group 3003.
+
+**Test: UID + inet group (3003) → dnsproxyd**
+```
+su -g 10172 -G 3003 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'
+
+  DNSPROXYD CONNECT: SUCCESS
+  getaddrinfo("example.com"): [('172.66.147.243', 443), ...]
+```
+
+One group. That's it. No SELinux change. No `resolv.conf`. No `runcon`.
+
+---
+
+#### What `txsu` does
+
+Detect all required GIDs dynamically via `stat`, never hardcoded:
+
+```
+txsu startup
+      │
+      ├── TGID=$(stat -c '%g' /data/data/com.termux)
+      │         → primary group = Termux GID
+      │
+      ├── IGID=$(stat -c '%g' /dev/socket/dnsproxyd)
+      │         → inet group = GID of the dnsproxyd socket itself
+      │           currently 3003 on your device, but detected live
+      │
+      ├── SGID=$(stat -c '%g' /storage)
+      │         → storage group = GID of /storage mount point
+      │           gates FUSE/sdcardfs access
+      │
+      ▼
+/system/bin/su
+    -g  $TGID          ← primary group
+    -G  $IGID          ← supplementary: inet  → dnsproxyd access → DNS/network
+    -G  $SGID          ← supplementary: storage → /sdcard, /storage access
+    $TUID
+      │
+      ▼
+process credentials:
+    uid    = 10172
+    gid    = 10172
+    groups = [ 10172, $IGID, $SGID ]
+      │
+      ├── /dev/socket/dnsproxyd  ← gid matches IGID → access granted ✅
+      │         → Android resolver → DNS works ✅
+      │
+      └── /storage, /sdcard      ← gid matches SGID → FUSE grants access ✅
+```
+
+**Why `stat` on the socket and mount point:** GIDs are not fixed across devices, Android versions, or custom ROMs. Reading the GID directly from the resource being accessed means the detection is always correct and self-documenting — the inet group is the group that owns `dnsproxyd`, the storage group is the group that owns `/storage`.
+
+**Why not copy all real Termux groups:** The real Termux process has 5 supplementary groups (`1077 3003 9997 20172 50172`). We could copy them all, but `stat`-based detection of the two that matter (inet, storage) is more portable — it doesn't depend on a live Termux process being present, and it doesn't copy groups whose purpose is unknown or irrelevant to the shell session.
+
+**Result:** `/sdcard` read/write works, DNS works, `curl`/`wget`/`git`/`pip` all work — with no SELinux manipulation, no `resolv.conf` writing, no process scanning.
 
 ---
 
