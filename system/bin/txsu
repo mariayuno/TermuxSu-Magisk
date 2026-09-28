@@ -1,0 +1,106 @@
+#!/system/bin/sh
+# txsu - TermuxSu-Magisk
+# Invoke a proper Termux shell from any root shell
+# with full Termux user context, permissions, and working network.
+#
+# Usage:
+#   txsu              - interactive Termux shell
+#   txsu -c "cmd"     - run a single command in Termux env
+#   txsu -h           - show help
+#
+# SPDX-License-Identifier: MIT
+
+set -e
+
+TERMUX_PKG="com.termux"
+TERMUX_UID=$(dumpsys package "$TERMUX_PKG" 2>/dev/null | grep userId= | head -1 | tr -d ' ' | cut -d= -f2)
+TERMUX_DATA="/data/data/${TERMUX_PKG}"
+TERMUX_PREFIX="${TERMUX_DATA}/files/usr"
+TERMUX_HOME="${TERMUX_DATA}/files/home"
+
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+die() { echo "[txsu] ERROR: $*" >&2; exit 1; }
+info() { echo "[txsu] $*" >&2; }
+
+usage() {
+  cat >&2 <<EOF
+Usage: txsu [-c <command>] [-h]
+  (no args)    Open interactive Termux shell
+  -c <cmd>     Run <cmd> inside Termux environment and exit
+  -h           Show this help
+EOF
+  exit 0
+}
+
+# ── preflight checks ───────────────────────────────────────────────────────────
+
+[ "$(id -u)" = "0" ] || die "txsu must be run as root"
+[ -d "$TERMUX_PREFIX" ] || die "Termux not found at $TERMUX_PREFIX — is Termux installed?"
+[ -n "$TERMUX_UID" ]   || die "Could not resolve Termux UID — is Termux installed?"
+
+# ── parse args ─────────────────────────────────────────────────────────────────
+
+CMD=""
+while getopts ":c:h" opt; do
+  case $opt in
+    c) CMD="$OPTARG" ;;
+    h) usage ;;
+    *) die "Unknown option: -$OPTARG" ;;
+  esac
+done
+
+# ── network: inherit root's network namespace ───────────────────────────────────
+# Termux user is u0_aXXX — we need to enter the default network namespace
+# which root already has, but we must also fix DNS for the Termux user.
+# We do this by setting up resolv.conf symlink inside Termux prefix if needed.
+
+TERMUX_RESOLV="${TERMUX_PREFIX}/etc/resolv.conf"
+SYSTEM_RESOLV="/etc/resolv.conf"
+
+if [ ! -e "$TERMUX_RESOLV" ] || [ ! -s "$TERMUX_RESOLV" ]; then
+  info "Linking DNS resolver for Termux..."
+  mkdir -p "${TERMUX_PREFIX}/etc"
+  cp "$SYSTEM_RESOLV" "$TERMUX_RESOLV" 2>/dev/null || true
+fi
+
+# ── build environment ──────────────────────────────────────────────────────────
+
+TERMUX_ENV="
+HOME=${TERMUX_HOME}
+PREFIX=${TERMUX_PREFIX}
+PATH=${TERMUX_PREFIX}/bin:${TERMUX_PREFIX}/bin/applets:/system/bin:/system/xbin
+TERM=${TERM:-xterm-256color}
+LANG=en_US.UTF-8
+LD_LIBRARY_PATH=${TERMUX_PREFIX}/lib
+TMPDIR=${TERMUX_PREFIX}/tmp
+"
+
+# Export as args for env(1)
+ENV_ARGS=""
+for line in $TERMUX_ENV; do
+  [ -n "$line" ] && ENV_ARGS="$ENV_ARGS $line"
+done
+
+# ── SELinux context ────────────────────────────────────────────────────────────
+# Switch to Termux's SELinux context if possible (non-fatal if not)
+SELINUX_CTX="u:r:untrusted_app:s0:c$(( TERMUX_UID - 10000 )),c256,c512,c768"
+
+runcon_available() { command -v runcon >/dev/null 2>&1; }
+
+# ── switch to Termux user and exec shell ───────────────────────────────────────
+
+SHELL_BIN="${TERMUX_PREFIX}/bin/bash"
+[ -x "$SHELL_BIN" ] || SHELL_BIN="${TERMUX_PREFIX}/bin/sh"
+
+exec_in_termux() {
+  local _cmd="$1"
+  if runcon_available; then
+    exec runcon "$SELINUX_CTX"       /system/bin/su "$TERMUX_UID"       /system/bin/env -i $ENV_ARGS       "$SHELL_BIN" ${_cmd:+-c "$_cmd"}
+  else
+    info "runcon not available — skipping SELinux context switch"
+    exec /system/bin/su "$TERMUX_UID"       /system/bin/env -i $ENV_ARGS       "$SHELL_BIN" ${_cmd:+-c "$_cmd"}
+  fi
+}
+
+exec_in_termux "$CMD"
