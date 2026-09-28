@@ -1,3 +1,7 @@
+## v2.0.5
+
+- fix: strip comments from sepolicy.rule, use ksud sepolicy apply syntax (f450dd5)
+
 ## v2.0.4
 
 - fix: add missing setcurrent permission + collapse rules with {} syntax (a8658cd)
