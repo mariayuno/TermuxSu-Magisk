@@ -1,10 +1,16 @@
 #!/system/bin/sh
-# service.sh - runs late in boot (after Termux data is accessible)
-# Creates the 'termux' alias symlink for txsu
+# service.sh — TermuxSu-Magisk
+# Runs late-boot (Magisk stage: service).
+# Creates /system/bin/termux symlink → txsu.
 
 TXSU="/system/bin/txsu"
 ALIAS="/system/bin/termux"
 
-if [ -f "$TXSU" ] && [ ! -e "$ALIAS" ]; then
-  ln -sf "$TXSU" "$ALIAS"
+if [ -f "$TXSU" ]; then
+  if [ ! -e "$ALIAS" ]; then
+    ln -sf "$TXSU" "$ALIAS" && \
+      log -t TermuxSu-Magisk "Created alias: $ALIAS -> $TXSU"
+  fi
+else
+  log -t TermuxSu-Magisk "ERROR: $TXSU not found — module may not be installed correctly"
 fi
