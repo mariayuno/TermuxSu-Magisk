@@ -1,6 +1,7 @@
 # TermuxSu-Magisk
 
 <!-- VERSION_BADGE_START -->
+<img alt="Version" src="https://img.shields.io/badge/version-v2.0.0-7c3aed?style=flat-square&logo=github&logoColor=white">
 <!-- VERSION_BADGE_END -->
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
@@ -33,6 +34,40 @@ When you `su` into root on Android and try to run Termux commands, things silent
 ## Install
 
 <!-- INSTALL_ONELINER_START -->
+<table>
+<tr>
+<td valign="top" width="70%">
+
+### One-liner install (root shell)
+
+> Downloads and installs the current release directly.
+
+**Magisk**
+```sh
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.0/TermuxSu-Magisk-v2.0.0.zip && magisk --install-module /tmp/txsu.zip
+```
+
+**KernelSU / ResuKiSU**
+```sh
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.0/TermuxSu-Magisk-v2.0.0.zip && /data/adb/ksud module install /tmp/txsu.zip
+```
+
+**APatch**
+```sh
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v2.0.0/TermuxSu-Magisk-v2.0.0.zip && /data/adb/apd module install /tmp/txsu.zip
+```
+
+</td>
+<td valign="top" align="right" width="30%">
+<p align="right">
+<img alt="Version" src="https://img.shields.io/badge/v2.0.0-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-Magisk-v2.0.0.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Code" src="https://img.shields.io/badge/version%20code-2-0891b2?style=for-the-badge">
+</p>
+</td>
+</tr>
+</table>
+
 <!-- INSTALL_ONELINER_END -->
 
 Or download the latest `.zip` from [Releases](../../releases) and flash manually
