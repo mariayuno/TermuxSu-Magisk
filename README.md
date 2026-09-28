@@ -116,7 +116,7 @@ txsu
 
 ---
 
-> **Termux prerequisite:** at least one shell must be installed. Bash ships with Termux by default. `txsu` honours whatever shell you've configured with `chsh`.
+> **Termux prerequisite:** at least one shell must be installed. Bash ships with Termux by default and requires no extra setup. To use a different shell, install it and run `chsh -s zsh` (or `bash`, `fish`, etc.) inside Termux — this writes `~/.termux/shell`, which `txsu` reads to pick the right shell. If you've never run `chsh`, `txsu` falls back to bash.
 
 ---
 
