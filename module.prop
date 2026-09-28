@@ -1,6 +1,6 @@
 id=termux_su
 name=TermuxSu-Magisk
-version=v2.0.3
-versionCode=5
+version=v2.0.4
+versionCode=6
 author=mariayuno
 description=Invoke Termux shell from root with full user context, permissions, SELinux, and working network

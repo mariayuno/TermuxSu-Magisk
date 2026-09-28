@@ -1,3 +1,7 @@
+## v2.0.4
+
+- fix: add missing setcurrent permission + collapse rules with {} syntax (a8658cd)
+
 ## v2.0.3
 
 - docs: add SELinux policy section with security note (8cbdacb)
