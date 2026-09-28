@@ -3,79 +3,68 @@
 SU=/system/bin/su
 
 TERMUX_DATA=/data/data/com.termux
-TERMUX_PREFIX="$TERMUX_DATA/files/usr"
-TERMUX_HOME="$TERMUX_DATA/files/home"
-TERMUX_EXEC="$TERMUX_PREFIX/lib/libtermux-exec-ld-preload.so"
+TERMUX_PREFIX=/data/data/com.termux/files/usr
+TERMUX_HOME=/data/data/com.termux/files/home
+TERMUX_ZDOTDIR=/data/data/com.termux/files/home/.config/zsh
+TERMUX_EXEC=/data/data/com.termux/files/usr/lib/libtermux-exec-ld-preload.so
 
-die() {
-    echo "termsh: ERROR: $*" >&2
-    exit 1
-}
+die() { echo "txsu: ERROR: $*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "must run as root"
-
-[ -d "$TERMUX_DATA" ] || die "Termux data directory not found"
-[ -d "$TERMUX_HOME" ] || die "Termux home not found"
+[ -d "$TERMUX_DATA" ]         || die "Termux data directory not found"
+[ -d "$TERMUX_HOME" ]         || die "Termux home not found"
 [ -x "$TERMUX_PREFIX/bin/zsh" ] || die "Termux zsh not found"
-[ -f "$TERMUX_EXEC" ] || die "Termux exec preload not found"
+[ -f "$TERMUX_EXEC" ]         || die "Termux exec preload not found"
 
-TERMUX_UID=$(stat -c '%u' "$TERMUX_DATA") || die "cannot determine Termux UID"
-TERMUX_GID=$(stat -c '%g' "$TERMUX_DATA") || die "cannot determine Termux GID"
+TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
+TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
+IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
+SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
 
-INET_GID=$(stat -c '%g' /dev/socket/dnsproxyd) ||
-    die "cannot determine inet group"
-
-STORAGE_GID=$(stat -c '%g' /storage) ||
-    die "cannot determine storage group"
-
-exec "$SU" \
-    -g "$TERMUX_GID" \
-    -G "$INET_GID" \
-    -G "$STORAGE_GID" \
-    "$TERMUX_UID" \
+"$SU" \
+    -g "$TGID" \
+    -G "$IGID" \
+    -G "$SGID" \
+    "$TUID" \
     /system/bin/sh \
-    -c '
-        TERMUX_DATA="$1"
-        TERMUX_PREFIX="$2"
-        TERMUX_HOME="$3"
-        TERMUX_EXEC="$4"
+    -c "
+        export HOME='$TERMUX_HOME'
+        export PREFIX='$TERMUX_PREFIX'
+        export ZDOTDIR='$TERMUX_ZDOTDIR'
 
-        export HOME="$TERMUX_HOME"
-        export PREFIX="$TERMUX_PREFIX"
-        export TMPDIR="$TERMUX_PREFIX/tmp"
+        export TERM='xterm-256color'
+        export LANG='\${LANG:-en_US.UTF-8}'
 
-        export EXTERNAL_STORAGE=/sdcard
-
-        export ANDROID_ROOT=/system
-        export ANDROID_DATA=/data
-        export ANDROID_STORAGE=/storage
-        export ANDROID_ASSETS=/system/app
-        export ANDROID_ART_ROOT=/apex/com.android.art
-        export ANDROID_I18N_ROOT=/apex/com.android.i18n
-        export ANDROID_TZDATA_ROOT=/apex/com.android.tzdata
-
-        export TERMUX__ROOTFS_DIR="$TERMUX_DATA/files"
-        export TERMUX__HOME="$TERMUX_HOME"
-        export TERMUX__PREFIX="$TERMUX_PREFIX"
-        export TERMUX__UID="$(id -u)"
+        export TERMUX__ROOTFS_DIR='$TERMUX_DATA/files'
+        export TERMUX__HOME='$TERMUX_HOME'
+        export TERMUX__PREFIX='$TERMUX_PREFIX'
+        export TERMUX__UID=\"\$(id -u)\"
         export TERMUX__USER_ID=0
 
-        export TERMUX_APP__PACKAGE_NAME=com.termux
-        export TERMUX_APP__DATA_DIR="$TERMUX_DATA"
+        export TERMUX_APP__PACKAGE_NAME='com.termux'
+        export TERMUX_APP__DATA_DIR='$TERMUX_DATA'
 
-        export SHELL="$TERMUX_PREFIX/bin/zsh"
+        export SHELL='$TERMUX_PREFIX/bin/zsh'
+        export EXTERNAL_STORAGE='/sdcard'
 
-        export LD_PRELOAD="$TERMUX_EXEC"
+        export ANDROID_ROOT='/system'
+        export ANDROID_DATA='/data'
+        export ANDROID_STORAGE='/storage'
+        export ANDROID_ASSETS='/system/app'
+        export ANDROID_ART_ROOT='/apex/com.android.art'
+        export ANDROID_I18N_ROOT='/apex/com.android.i18n'
+        export ANDROID_TZDATA_ROOT='/apex/com.android.tzdata'
 
-        cd "$TERMUX_HOME" || {
-            echo "termsh: cannot cd to $TERMUX_HOME" >&2
-            exit 1
-        }
+        export PATH='$TERMUX_PREFIX/bin:$TERMUX_PREFIX/bin/applets:/system/bin:/system/xbin:/system/sbin:/sbin:/sbin/bin'
+        export TMPDIR='$TERMUX_PREFIX/tmp'
 
-        exec "$TERMUX_PREFIX/bin/zsh" -l -i
-    ' \
-    termsh \
-    "$TERMUX_DATA" \
-    "$TERMUX_PREFIX" \
-    "$TERMUX_HOME" \
-    "$TERMUX_EXEC"
+        unset LD_LIBRARY_PATH
+        export LD_PRELOAD='$TERMUX_EXEC'
+
+        cd '$TERMUX_HOME' || exit 1
+        exec '$TERMUX_PREFIX/bin/zsh' -l -i
+    "
+
+RC=$?
+[ "$RC" -ne 0 ] && echo "" && echo "txsu: shell exited with status $RC"
+exit "$RC"
