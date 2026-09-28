@@ -21,8 +21,11 @@ jobs:
 
       # ---------------------------------------------------------------
       # Bump version in module.prop
-      # version format: vMAJOR.MINOR  (e.g. v1.0 -> v1.1 -> v2.0)
-      # versionCode: integer, increments by 1 each release
+      # version format: vMAJOR.MINOR.PATCH  (e.g. v1.0.0 -> v1.0.1 -> v1.1.0)
+      # PATCH bumps on every push to main.
+      # MINOR bumps (PATCH resets to 0) when commit message contains [minor].
+      # MAJOR bumps (MINOR+PATCH reset to 0) when commit message contains [major].
+      # versionCode: integer, always increments by 1.
       # ---------------------------------------------------------------
 
       - name: Bump version in module.prop
@@ -35,7 +38,7 @@ jobs:
           [[ -f "$PROP" ]] || { echo "ERROR: $PROP not found."; exit 1; }
 
           OLD_CODE=$(grep '^versionCode=' "$PROP" | cut -d= -f2)
-          CURRENT_VERSION=$(grep '^version='     "$PROP" | cut -d= -f2)
+          CURRENT_VERSION=$(grep '^version=' "$PROP" | cut -d= -f2)
 
           [[ -n "$OLD_CODE"          ]] || { echo "ERROR: versionCode missing in $PROP"; exit 1; }
           [[ -n "$CURRENT_VERSION"   ]] || { echo "ERROR: version missing in $PROP";     exit 1; }
@@ -43,23 +46,33 @@ jobs:
 
           NEW_CODE=$(( OLD_CODE + 1 ))
 
-          if [[ "$CURRENT_VERSION" =~ ^v([0-9]+)\.([0-9]+)$ ]]; then
+          if [[ "$CURRENT_VERSION" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             MAJOR="${BASH_REMATCH[1]}"
             MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
           else
-            echo "ERROR: invalid version format: $CURRENT_VERSION (expected vMAJOR.MINOR)"
+            echo "ERROR: invalid version format: $CURRENT_VERSION (expected vMAJOR.MINOR.PATCH)"
             exit 1
           fi
 
-          if (( MINOR >= 9 )); then
+          # Read last commit message to decide bump level
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          if echo "$COMMIT_MSG" | grep -qF '[major]'; then
             NEW_MAJOR=$(( MAJOR + 1 ))
             NEW_MINOR=0
-          else
+            NEW_PATCH=0
+          elif echo "$COMMIT_MSG" | grep -qF '[minor]'; then
             NEW_MAJOR=$MAJOR
             NEW_MINOR=$(( MINOR + 1 ))
+            NEW_PATCH=0
+          else
+            NEW_MAJOR=$MAJOR
+            NEW_MINOR=$MINOR
+            NEW_PATCH=$(( PATCH + 1 ))
           fi
 
-          NEW_VERSION="v${NEW_MAJOR}.${NEW_MINOR}"
+          NEW_VERSION="v${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
 
           sed -i "s/^version=.*/version=${NEW_VERSION}/"       "$PROP"
           sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" "$PROP"
@@ -81,7 +94,6 @@ jobs:
           set -euo pipefail
 
           VERSION="${{ steps.bump.outputs.version }}"
-
           TAG="${VERSION}"
           NAME="TermuxSu-Magisk ${VERSION}"
           ARTIFACT="TermuxSu-Magisk-${VERSION}.zip"
@@ -184,9 +196,7 @@ jobs:
           echo "notes_file=release_notes.md" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------
-      # README — update two auto-generated sections between markers:
-      #   <!-- VERSION_BADGE_START --> ... <!-- VERSION_BADGE_END -->
-      #   <!-- INSTALL_ONELINER_START --> ... <!-- INSTALL_ONELINER_END -->
+      # README — update auto-generated sections between markers
       # ---------------------------------------------------------------
 
       - name: Update README badges and install banner
@@ -300,9 +310,9 @@ jobs:
           grep -Fq "$RELEASE_URL"       "$README" || { echo "ERROR: release URL stale.";      exit 1; }
           grep -Fq "$ARTIFACT"          "$README" || { echo "ERROR: artifact name stale.";    exit 1; }
           grep -Fq "$VERSION_CODE"      "$README" || { echo "ERROR: version code stale.";     exit 1; }
-          grep -Fq "magisk --install-module /tmp/txsu.zip"         "$README" || { echo "ERROR: Magisk installer missing.";   exit 1; }
-          grep -Fq "/data/adb/ksud module install /tmp/txsu.zip"   "$README" || { echo "ERROR: KernelSU installer missing."; exit 1; }
-          grep -Fq "/data/adb/apd module install /tmp/txsu.zip"    "$README" || { echo "ERROR: APatch installer missing.";   exit 1; }
+          grep -Fq "magisk --install-module /tmp/txsu.zip"       "$README" || { echo "ERROR: Magisk installer missing.";   exit 1; }
+          grep -Fq "/data/adb/ksud module install /tmp/txsu.zip" "$README" || { echo "ERROR: KernelSU installer missing."; exit 1; }
+          grep -Fq "/data/adb/apd module install /tmp/txsu.zip"  "$README" || { echo "ERROR: APatch installer missing.";   exit 1; }
 
           echo "README verification passed."
 
@@ -398,9 +408,9 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name:  ${{ steps.meta.outputs.tag }}
-          name:      ${{ steps.meta.outputs.name }}
-          body_path: ${{ steps.changelog.outputs.notes_file }}
-          files:     ${{ steps.build.outputs.zip }}
-          draft:     false
+          tag_name:   ${{ steps.meta.outputs.tag }}
+          name:       ${{ steps.meta.outputs.name }}
+          body_path:  ${{ steps.changelog.outputs.notes_file }}
+          files:      ${{ steps.build.outputs.zip }}
+          draft:      false
           prerelease: false
