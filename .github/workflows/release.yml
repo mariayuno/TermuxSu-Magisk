@@ -1,0 +1,406 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # Bump version in module.prop
+      # version format: vMAJOR.MINOR  (e.g. v1.0 -> v1.1 -> v2.0)
+      # versionCode: integer, increments by 1 each release
+      # ---------------------------------------------------------------
+
+      - name: Bump version in module.prop
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROP="module.prop"
+          [[ -f "$PROP" ]] || { echo "ERROR: $PROP not found."; exit 1; }
+
+          OLD_CODE=$(grep '^versionCode=' "$PROP" | cut -d= -f2)
+          CURRENT_VERSION=$(grep '^version='     "$PROP" | cut -d= -f2)
+
+          [[ -n "$OLD_CODE"          ]] || { echo "ERROR: versionCode missing in $PROP"; exit 1; }
+          [[ -n "$CURRENT_VERSION"   ]] || { echo "ERROR: version missing in $PROP";     exit 1; }
+          [[ "$OLD_CODE" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid versionCode: $OLD_CODE"; exit 1; }
+
+          NEW_CODE=$(( OLD_CODE + 1 ))
+
+          if [[ "$CURRENT_VERSION" =~ ^v([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+          else
+            echo "ERROR: invalid version format: $CURRENT_VERSION (expected vMAJOR.MINOR)"
+            exit 1
+          fi
+
+          if (( MINOR >= 9 )); then
+            NEW_MAJOR=$(( MAJOR + 1 ))
+            NEW_MINOR=0
+          else
+            NEW_MAJOR=$MAJOR
+            NEW_MINOR=$(( MINOR + 1 ))
+          fi
+
+          NEW_VERSION="v${NEW_MAJOR}.${NEW_MINOR}"
+
+          sed -i "s/^version=.*/version=${NEW_VERSION}/"       "$PROP"
+          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" "$PROP"
+
+          echo "version=${NEW_VERSION}"   >> "$GITHUB_OUTPUT"
+          echo "version_code=${NEW_CODE}" >> "$GITHUB_OUTPUT"
+
+          echo "Version:     ${CURRENT_VERSION} -> ${NEW_VERSION}"
+          echo "VersionCode: ${OLD_CODE} -> ${NEW_CODE}"
+
+      # ---------------------------------------------------------------
+      # Release metadata
+      # ---------------------------------------------------------------
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+
+          TAG="${VERSION}"
+          NAME="TermuxSu-Magisk ${VERSION}"
+          ARTIFACT="TermuxSu-Magisk-${VERSION}.zip"
+
+          echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}"         >> "$GITHUB_OUTPUT"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+
+          echo "Release tag:  ${TAG}"
+          echo "Release name: ${NAME}"
+          echo "Artifact:     ${ARTIFACT}"
+
+      # ---------------------------------------------------------------
+      # update.json — consumed by Magisk / MMRL / KSU module managers
+      # ---------------------------------------------------------------
+
+      - name: Update update.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+          CHANGELOG_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG.md"
+
+          cat > update.json <<EOF
+          {
+            "version": "${VERSION}",
+            "versionCode": ${VERSION_CODE},
+            "zipUrl": "${ZIP_URL}",
+            "changelog": "${CHANGELOG_URL}"
+          }
+          EOF
+
+          echo "Generated update.json:"
+          cat update.json
+
+      # ---------------------------------------------------------------
+      # Changelog
+      # ---------------------------------------------------------------
+
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          RANGE=$( [[ -n "$LAST_TAG" ]] && echo "${LAST_TAG}..HEAD" || echo "HEAD" )
+
+          LOG=$(git log "$RANGE" \
+            --pretty=format:"- %s (%h)" \
+            --no-merges \
+            | grep -v '^- chore: bump version' || true)
+
+          [[ -n "$LOG" ]] || LOG="- Minor update"
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+
+          {
+            echo "## What's changed"
+            echo
+            echo "$LOG"
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            echo "The SHA256 checksum is included below."
+            echo '```'
+            echo
+            echo "---"
+            echo
+            echo "Flash via Magisk Manager, MMRL, KSU WebUI, or APatch."
+            echo
+            echo "One-liner install (root shell):"
+            echo '```sh'
+            echo "curl -Lo /tmp/txsu.zip ${RELEASE_URL}"
+            echo "# Magisk"
+            echo "magisk --install-module /tmp/txsu.zip"
+            echo "# KernelSU / ResuKiSU"
+            echo "/data/adb/ksud module install /tmp/txsu.zip"
+            echo "# APatch"
+            echo "/data/adb/apd module install /tmp/txsu.zip"
+            echo '```'
+          } > release_notes.md
+
+          NEW_ENTRY="## ${VERSION}"$'\n\n'"${LOG}"$'\n'
+
+          if [[ -f CHANGELOG.md ]]; then
+            { echo "$NEW_ENTRY"; cat CHANGELOG.md; } > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+          else
+            printf '%s\n' "$NEW_ENTRY" > CHANGELOG.md
+          fi
+
+          echo "notes_file=release_notes.md" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # README — update two auto-generated sections between markers:
+      #   <!-- VERSION_BADGE_START --> ... <!-- VERSION_BADGE_END -->
+      #   <!-- INSTALL_ONELINER_START --> ... <!-- INSTALL_ONELINER_END -->
+      # ---------------------------------------------------------------
+
+      - name: Update README badges and install banner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          README="README.md"
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+
+          VERSION_START='<!-- VERSION_BADGE_START -->'
+          VERSION_END='<!-- VERSION_BADGE_END -->'
+          INSTALL_START='<!-- INSTALL_ONELINER_START -->'
+          INSTALL_END='<!-- INSTALL_ONELINER_END -->'
+
+          VERSION_COLOR="7c3aed"
+          PACKAGE_COLOR="2563eb"
+          CODE_COLOR="0891b2"
+
+          [[ -f "$README" ]] || { echo "ERROR: $README not found."; exit 1; }
+
+          for MARKER in "$VERSION_START" "$VERSION_END" "$INSTALL_START" "$INSTALL_END"; do
+            COUNT=$(grep -Fxc "$MARKER" "$README" || true)
+            [[ "$COUNT" == "1" ]] || { echo "ERROR: marker not found exactly once: $MARKER (found $COUNT)"; exit 1; }
+          done
+
+          VS_LINE=$(grep -n -F "$VERSION_START" "$README" | cut -d: -f1)
+          VE_LINE=$(grep -n -F "$VERSION_END"   "$README" | cut -d: -f1)
+          IS_LINE=$(grep -n -F "$INSTALL_START" "$README" | cut -d: -f1)
+          IE_LINE=$(grep -n -F "$INSTALL_END"   "$README" | cut -d: -f1)
+
+          (( VS_LINE < VE_LINE )) || { echo "ERROR: VERSION markers out of order."; exit 1; }
+          (( IS_LINE < IE_LINE )) || { echo "ERROR: INSTALL markers out of order."; exit 1; }
+
+          awk \
+            -v vs="$VERSION_START"  -v ve="$VERSION_END" \
+            -v is="$INSTALL_START"  -v ie="$INSTALL_END" \
+            -v version="$VERSION"   -v version_code="$VERSION_CODE" \
+            -v artifact="$ARTIFACT" -v release_url="$RELEASE_URL" \
+            -v vc="$VERSION_COLOR"  -v pc="$PACKAGE_COLOR" -v cc="$CODE_COLOR" \
+          '
+          $0 == vs {
+            print
+            print "<img alt=\"Version\" src=\"https://img.shields.io/badge/version-" version "-" vc "?style=flat-square&logo=github&logoColor=white\">"
+            print ve
+            in_v = 1; next
+          }
+          $0 == ve { if (in_v) { in_v = 0; next } }
+
+          $0 == is {
+            print
+            print "<table>"
+            print "<tr>"
+            print "<td valign=\"top\" width=\"70%\">"
+            print ""
+            print "### One-liner install (root shell)"
+            print ""
+            print "> Downloads and installs the current release directly."
+            print ""
+            print "**Magisk**"
+            print "```sh"
+            print "curl -Lo /tmp/txsu.zip " release_url " && magisk --install-module /tmp/txsu.zip"
+            print "```"
+            print ""
+            print "**KernelSU / ResuKiSU**"
+            print "```sh"
+            print "curl -Lo /tmp/txsu.zip " release_url " && /data/adb/ksud module install /tmp/txsu.zip"
+            print "```"
+            print ""
+            print "**APatch**"
+            print "```sh"
+            print "curl -Lo /tmp/txsu.zip " release_url " && /data/adb/apd module install /tmp/txsu.zip"
+            print "```"
+            print ""
+            print "</td>"
+            print "<td valign=\"top\" align=\"right\" width=\"30%\">"
+            print "<p align=\"right\">"
+            print "<img alt=\"Version\" src=\"https://img.shields.io/badge/" version "-" vc "?style=for-the-badge&logo=github&logoColor=white\"><br>"
+            print "<img alt=\"Package\" src=\"https://img.shields.io/badge/package-" artifact "-" pc "?style=for-the-badge&logo=files&logoColor=white\"><br>"
+            print "<img alt=\"Code\" src=\"https://img.shields.io/badge/version%20code-" version_code "-" cc "?style=for-the-badge\">"
+            print "</p>"
+            print "</td>"
+            print "</tr>"
+            print "</table>"
+            print ""
+            in_i = 1; next
+          }
+          $0 == ie { if (in_i) { in_i = 0; print; next } }
+
+          !in_v && !in_i { print }
+          ' "$README" > "${README}.tmp"
+
+          mv "${README}.tmp" "$README"
+          echo "README updated."
+
+      - name: Verify README
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          README="README.md"
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+
+          grep -Fq "version-${VERSION}" "$README" || { echo "ERROR: version badge stale.";    exit 1; }
+          grep -Fq "$RELEASE_URL"       "$README" || { echo "ERROR: release URL stale.";      exit 1; }
+          grep -Fq "$ARTIFACT"          "$README" || { echo "ERROR: artifact name stale.";    exit 1; }
+          grep -Fq "$VERSION_CODE"      "$README" || { echo "ERROR: version code stale.";     exit 1; }
+          grep -Fq "magisk --install-module /tmp/txsu.zip"         "$README" || { echo "ERROR: Magisk installer missing.";   exit 1; }
+          grep -Fq "/data/adb/ksud module install /tmp/txsu.zip"   "$README" || { echo "ERROR: KernelSU installer missing."; exit 1; }
+          grep -Fq "/data/adb/apd module install /tmp/txsu.zip"    "$README" || { echo "ERROR: APatch installer missing.";   exit 1; }
+
+          echo "README verification passed."
+
+      # ---------------------------------------------------------------
+      # Build flashable zip
+      # ---------------------------------------------------------------
+
+      - name: Build flashable zip
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="${{ steps.meta.outputs.artifact }}"
+
+          zip -q -r "$ZIP" . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "*.zip" \
+            -x "*.DS_Store" \
+            -x "*.swp" \
+            -x "*.bak" \
+            -x "release_notes.md" \
+            -x "CHANGELOG.md" \
+            -x "update.json"
+
+          SHA256=$(sha256sum "$ZIP" | cut -d' ' -f1)
+
+          sed -i \
+            "s/The SHA256 checksum is included below\./SHA256  ${SHA256}  ${ZIP}/" \
+            release_notes.md
+
+          echo "zip=${ZIP}"       >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+          echo "Built:  $ZIP"
+          echo "SHA256: $SHA256"
+
+      # ---------------------------------------------------------------
+      # Final consistency gate
+      # ---------------------------------------------------------------
+
+      - name: Final consistency check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+
+          ACTUAL_VER=$(grep  '^version='     module.prop | cut -d= -f2)
+          ACTUAL_CODE=$(grep '^versionCode=' module.prop | cut -d= -f2)
+
+          [[ "$ACTUAL_VER"  == "$VERSION"      ]] || { echo "ERROR: module.prop version mismatch ($ACTUAL_VER != $VERSION)";           exit 1; }
+          [[ "$ACTUAL_CODE" == "$VERSION_CODE" ]] || { echo "ERROR: module.prop versionCode mismatch ($ACTUAL_CODE != $VERSION_CODE)"; exit 1; }
+
+          grep -Fq "\"version\": \"${VERSION}\""      update.json || { echo "ERROR: update.json version mismatch.";     exit 1; }
+          grep -Fq "\"versionCode\": ${VERSION_CODE}" update.json || { echo "ERROR: update.json versionCode mismatch."; exit 1; }
+
+          [[ -f "$ARTIFACT" ]] || { echo "ERROR: artifact not found: $ARTIFACT"; exit 1; }
+
+          grep -Fq "$VERSION"  README.md || { echo "ERROR: README missing version.";  exit 1; }
+          grep -Fq "$ARTIFACT" README.md || { echo "ERROR: README missing artifact."; exit 1; }
+
+          echo "All consistency checks passed."
+
+      # ---------------------------------------------------------------
+      # Commit bumped files back to main
+      # ---------------------------------------------------------------
+
+      - name: Commit version bump and metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add module.prop update.json CHANGELOG.md README.md
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      # ---------------------------------------------------------------
+      # GitHub release + attach zip
+      # ---------------------------------------------------------------
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:  ${{ steps.meta.outputs.tag }}
+          name:      ${{ steps.meta.outputs.name }}
+          body_path: ${{ steps.changelog.outputs.notes_file }}
+          files:     ${{ steps.build.outputs.zip }}
+          draft:     false
+          prerelease: false
