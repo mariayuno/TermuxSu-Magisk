@@ -355,7 +355,7 @@ txsu startup
 
 **Why `stat` on the socket:** the `inet` group GID is not a fixed number across all Android devices and versions. `stat -c '%g' /dev/socket/dnsproxyd` reads it directly from the socket that the group is meant to grant access to — self-documenting, device-agnostic, always correct.
 
-**Why not `runcon`:** the `netdomain` SELinux permission is already present in `ksu` on current KSU/ResuKiSU. If it weren't, the correct fix is `sepolicy.rule` (which the module ships), not impersonating an app domain at runtime.
+**Why not `runcon`:** the `netdomain` SELinux permission is already present in `ksu` on current KSU/ResuKiSU. If a custom build lacked it, the correct fix would be a `sepolicy.rule`, not impersonating an app domain at runtime.
 
 **Why no `resolv.conf`:** Android's resolver bypasses it entirely. Termux processes using Python, curl, wget, git all go through bionic's `getaddrinfo()` → `dnsproxyd`. The correct DNS state flows automatically once the process has the right UID and `inet` group.
 
@@ -667,29 +667,6 @@ txsu shell (uid=10172)
 - Rooted device: Magisk, KernelSU, ResuKiSU, or APatch
 - Termux installed with zsh (`pkg install zsh`)
 - Android 7+
-
----
-
-## SELinux
-
-Ships `sepolicy.rule` allowing the root manager domain to call `setcurrent` and transition into the Termux app domain. This is needed on devices where the root domain lacks `netdomain` permissions (some custom KSU builds, older Magisk builds).
-
-Covered root manager domains:
-
-| Domain | Root manager |
-|---|---|
-| `u:r:magisk:s0` | Magisk, APatch |
-| `u:r:ksu:s0` | KernelSU, ResuKiSU |
-
-Covered app domain types (based on Termux target SDK, not Android version):
-
-| Type | Target SDK | Notes |
-|---|---|---|
-| `untrusted_app` | latest | current AOSP default |
-| `untrusted_app_25` | 25–27 | |
-| `untrusted_app_27` | 28+ | Termux currently targets SDK 28 — this is the active one |
-
-> ⚠️ **Security note:** `sepolicy.rule` allows `magisk`/`ksu` to transition into *any* `untrusted_app` domain on the device, not only Termux. On a device you've already rooted, this is an acceptable trade-off — a process already in `ksu` context is already root. However it does weaken SELinux's defence-in-depth between root and app domains. Do not install this module on a device where you rely on SELinux as a meaningful security boundary.
 
 ---
 
