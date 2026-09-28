@@ -5,33 +5,50 @@ SU=/system/bin/su
 TERMUX_DATA=/data/data/com.termux
 TERMUX_PREFIX=/data/data/com.termux/files/usr
 TERMUX_HOME=/data/data/com.termux/files/home
-TERMUX_ZDOTDIR=/data/data/com.termux/files/home/.config/zsh
-TERMUX_EXEC=/data/data/com.termux/files/usr/lib/libtermux-exec-ld-preload.so
+
+# libtermux-exec.so is the stable public name (symlink to whichever variant
+# is active on this device). libtermux-exec-ld-preload.so is an internal
+# variant file — do not hardcode it.
+TERMUX_EXEC=/data/data/com.termux/files/usr/lib/libtermux-exec.so
 
 die() { echo "txsu: ERROR: $*" >&2; exit 1; }
 
 [ "$(id -u)" = 0 ] || die "must run as root"
-[ -d "$TERMUX_DATA" ]    || die "Termux data directory not found"
-[ -d "$TERMUX_HOME" ]    || die "Termux home not found"
-[ -f "$TERMUX_EXEC" ]    || die "Termux exec preload not found"
+[ -d "$TERMUX_DATA" ]  || die "Termux data directory not found: is Termux installed?"
+[ -d "$TERMUX_HOME" ]  || die "Termux home not found: open Termux at least once first"
+[ -f "$TERMUX_EXEC" ]  || die "libtermux-exec.so not found: run 'pkg install termux-exec' in Termux"
 
-# Shell detection: prefer zsh, fall back to bash, then sh
-if [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
-    TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
-    SHELL_OPTS="-l -i"
-    ZDOTDIR_EXPORT="export ZDOTDIR='$TERMUX_ZDOTDIR'"
+# Shell detection — honour the user's own Termux shell preference first.
+# ~/.termux/shell is the file Termux itself writes when you run 'chsh'.
+# Fall back to bash (Termux's default), then zsh, then give up.
+TERMUX_SHELL_LINK="$TERMUX_HOME/.termux/shell"
+if [ -x "$TERMUX_SHELL_LINK" ]; then
+    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null || echo "$TERMUX_SHELL_LINK")"
 elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
     TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
-    SHELL_OPTS="-l -i"
-    ZDOTDIR_EXPORT=""
+elif [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
 else
-    die "no usable shell found (install zsh or bash in Termux: pkg install zsh)"
+    die "no usable shell found — install one: pkg install bash"
 fi
+
+[ -x "$TERMUX_SHELL" ] || die "resolved shell '$TERMUX_SHELL' is not executable"
+
+# ZDOTDIR: only set for zsh, and only when the XDG config dir actually exists.
+# Setting it for users who keep .zshrc in $HOME would break their config.
+ZDOTDIR_EXPORT=""
+case "$TERMUX_SHELL" in
+    */zsh)
+        if [ -d "$TERMUX_HOME/.config/zsh" ]; then
+            ZDOTDIR_EXPORT="export ZDOTDIR='$TERMUX_HOME/.config/zsh'"
+        fi
+        ;;
+esac
 
 TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
 TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
 IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
-SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
+SGID="$(stat -c '%g' /storage)"              || die "cannot determine storage group"
 
 "$SU" \
     -g "$TGID" \
@@ -51,7 +68,6 @@ SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
         export TERMUX__HOME='$TERMUX_HOME'
         export TERMUX__PREFIX='$TERMUX_PREFIX'
         export TERMUX__UID=\"\$(id -u)\"
-        export TERMUX__USER_ID=0
 
         export TERMUX_APP__PACKAGE_NAME='com.termux'
         export TERMUX_APP__DATA_DIR='$TERMUX_DATA'
@@ -74,7 +90,7 @@ SGID="$(stat -c '%g' /storage)"        || die "cannot determine storage group"
         export LD_PRELOAD='$TERMUX_EXEC'
 
         cd '$TERMUX_HOME' || exit 1
-        exec '$TERMUX_SHELL' $SHELL_OPTS
+        exec '$TERMUX_SHELL' -l -i
     "
 
 RC=$?
