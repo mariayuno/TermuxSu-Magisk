@@ -2,11 +2,14 @@
 # Allow root manager domains to transition into Termux app domain.
 # Covers: Magisk (magisk), KernelSU/ResuKiSU (ksu), APatch (magisk).
 # Covers all untrusted_app variants across Android SDK versions.
+#
+# Three permissions required for runcon to switch context via /proc/self/attr/current:
+#   setcurrent   — permission to change own context at runtime
+#   dyntransition — permission to transition to the target domain dynamically
+#   transition   — permission for exec-based transition (for completeness)
 
-allow magisk untrusted_app    process { transition dyntransition }
-allow magisk untrusted_app_25 process { transition dyntransition }
-allow magisk untrusted_app_27 process { transition dyntransition }
+allow { magisk ksu } self process setcurrent
 
-allow ksu    untrusted_app    process { transition dyntransition }
-allow ksu    untrusted_app_25 process { transition dyntransition }
-allow ksu    untrusted_app_27 process { transition dyntransition }
+allow { magisk ksu } untrusted_app    process { transition dyntransition }
+allow { magisk ksu } untrusted_app_25 process { transition dyntransition }
+allow { magisk ksu } untrusted_app_27 process { transition dyntransition }
