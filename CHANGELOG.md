@@ -1,3 +1,7 @@
+## v2.0.3
+
+- docs: add SELinux policy section with security note (8cbdacb)
+
 ## v2.0.2
 
 - feat: add sepolicy.rule for runcon transition (all root managers + all SDK variants) (d031dc1)
