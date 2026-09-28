@@ -1,3 +1,7 @@
+## v2.0.1
+
+- fix: runcon probe-before-exec fallback + typo guard for utrusted_app (d5b8b99)
+
 ## v2.0.0
 
 - fix: support vMAJOR.MINOR.PATCH, smart bump via [major]/[minor] commit flags (e18bf91)
