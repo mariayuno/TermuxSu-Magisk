@@ -1,3 +1,7 @@
+## v2.0.2
+
+- feat: add sepolicy.rule for runcon transition (all root managers + all SDK variants) (d031dc1)
+
 ## v2.0.1
 
 - fix: runcon probe-before-exec fallback + typo guard for utrusted_app (d5b8b99)
