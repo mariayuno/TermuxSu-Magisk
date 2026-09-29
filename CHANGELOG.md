@@ -1,3 +1,11 @@
+## v1.2
+
+- fix: module id -> TermuxSu to match repo name, fix artifact naming, fix root context wording (0d0dcd8)
+- fix: remove misleading app names from root context description (ac834ba)
+- fix: remove SSH references, declarative subtitle, correct sudo/tsu claim, ANDROID_ASSETS note, LD_LIBRARY_PATH wording (af97ce5)
+- fix: clean header — remove ASCII art, remove SSH, proper HTML, fix subtitle (fe6eed8)
+- fix: replace broken SVG title with ASCII+h1, fix badges, add author (eba3362)
+
 ## v1.1
 
 - feat: add CI release pipeline, update.json, CHANGELOG, fix README header and install section (834ed6e)
