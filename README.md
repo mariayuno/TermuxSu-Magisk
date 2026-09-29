@@ -9,6 +9,16 @@
 <br>
 
 <!-- VERSION_BADGE_START -->
+<img alt="Version" src="https://img.shields.io/badge/version-v1.2-7c3aed?style=for-the-badge&logo=github&logoColor=white">
+&nbsp;
+<img alt="License" src="https://img.shields.io/badge/license-MIT-00bfff?style=for-the-badge&labelColor=0d1117">
+&nbsp;
+<img alt="Root" src="https://img.shields.io/badge/root-Magisk%20%7C%20KSU%20%7C%20APatch-ff6b6b?style=for-the-badge&labelColor=0d1117">
+&nbsp;
+<img alt="Shell" src="https://img.shields.io/badge/shell-bash%20%7C%20zsh%20%7C%20any-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948">
+&nbsp;
+<img alt="Android" src="https://img.shields.io/badge/android-rooted-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84">
+<!-- VERSION_BADGE_END -->
 
 <br><br>
 
