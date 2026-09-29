@@ -9,7 +9,7 @@
 <br>
 
 <!-- VERSION_BADGE_START -->
-<img alt="Version" src="https://img.shields.io/badge/version-v1.0-7c3aed?style=for-the-badge&logo=github&logoColor=white">
+<img alt="Version" src="https://img.shields.io/badge/version-v1.1-7c3aed?style=for-the-badge&logo=github&logoColor=white">
 <!-- VERSION_BADGE_END -->
 
 &nbsp;
@@ -88,33 +88,34 @@ Nothing is written to your system. If it works, pick a method below to make it p
 **KernelSU / ResuKiSU**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && /data/adb/ksud module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-v1.1.zip && /data/adb/ksud module install /tmp/txsu.zip
 ```
 
 **Magisk**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && magisk --install-module /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-v1.1.zip && magisk --install-module /tmp/txsu.zip
 ```
 
 **APatch**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && /data/adb/apd module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-v1.1.zip && /data/adb/apd module install /tmp/txsu.zip
 ```
 
 </td>
 <td valign="top" align="right" width="30%">
 
 <p align="right">
-<img alt="Version" src="https://img.shields.io/badge/v1.0-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
-<img alt="Package" src="https://img.shields.io/badge/package-txsu--v1.0.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
-<img alt="Version Code" src="https://img.shields.io/badge/version%20code-1-0891b2?style=for-the-badge">
+<img alt="Version" src="https://img.shields.io/badge/v1.1-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-txsu-v1.1.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Version Code" src="https://img.shields.io/badge/version%20code-2-0891b2?style=for-the-badge">
 </p>
 
 </td>
 </tr>
 </table>
+
 <!-- INSTALL_ONELINER_END -->
 
 ### Method 2 — Flash from Manager UI
