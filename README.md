@@ -1,18 +1,10 @@
 <div align="center">
 
-```
- _            _    _ 
-| |___  ___  | |  | |
-| __\ \/ /\_\| |  | |
-| |_ >  <\_/| |__| |
- \__/_/\_\  |____|_|
-```
+<h1><code>$ txsu</code></h1>
 
-# `$ txsu`
+<p><strong>A proper Termux shell from any root context.</strong></p>
 
-**Drop into a proper Termux shell from any root session.**
-
-`ssh phone` &nbsp;·&nbsp; `adb shell` &nbsp;·&nbsp; any root app &nbsp;→&nbsp; **one command**
+<p>Already in a root shell — ADB, KSU, Magisk, any root app — run <code>txsu</code> and land in your full configured Termux environment. Correct UID, groups, networking, storage, shell init. No broken impostor.</p>
 
 <br>
 
@@ -30,7 +22,7 @@
 
 <br><br>
 
-by **[Maria Yuno](https://mariayuno.neocities.org/)** &nbsp;·&nbsp; [`mariayuno001@proton.me`](mailto:mariayuno001@proton.me)
+by <a href="https://mariayuno.neocities.org/"><strong>Maria Yuno</strong></a> &nbsp;·&nbsp; <a href="mailto:mariayuno001@proton.me"><code>mariayuno001@proton.me</code></a>
 
 </div>
 
