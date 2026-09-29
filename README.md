@@ -65,7 +65,7 @@ You get a **broken impostor** that looks like one.
 
 ## ⚡ Try It Now — No Install Required
 
-Run this in a **root shell** (ADB, KSU shell, Magisk shell, or any root app) to try `txsu` without touching your system:
+Run this in a **root shell** (ADB, a root terminal, or any root context) to try `txsu` without touching your system:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
@@ -173,7 +173,7 @@ txsu
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│         ROOT SESSION  (ADB / KSU / Magisk / root app)           │
+│      ROOT SESSION  (adb shell, root terminal, any su)           │
 │                    uid=0 · env=root's env                       │
 └────────────────────────────┬────────────────────────────────────┘
                              │
