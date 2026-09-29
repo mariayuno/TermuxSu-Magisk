@@ -162,7 +162,6 @@ The module installs several aliases alongside `txsu` — all invoke the same scr
 | `txsh` | shell-flavoured alias |
 | `termsu` | long-form, readable |
 | `termux` | shorthand for "open Termux" |
-| `tsu` | terse, muscle-memory friendly |
 | `trmx` | compact variant |
 
 All land you in the same full Termux environment.
