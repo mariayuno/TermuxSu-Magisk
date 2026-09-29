@@ -4,7 +4,7 @@
 
 <p><strong>A proper Termux shell from any root context.</strong></p>
 
-<p>Already in a root shell — ADB, KSU, Magisk, any root app — run <code>txsu</code> and land in your full configured Termux environment. Correct UID, groups, networking, storage, shell init. No broken impostor.</p>
+<p>Run <code>txsu</code> from any root shell and land directly in your full configured Termux environment. Correct UID, groups, networking, storage, and shell init. No broken impostor.</p>
 
 <br>
 
@@ -55,7 +55,7 @@ You get a **broken impostor** that looks like one.
 |---|---|
 | 🌐 Networking | Missing `inet` supplementary group — can't open `dnsproxyd` socket |
 | 💾 `/sdcard` access | Missing `storage` supplementary group — FUSE denies access |
-| 🔧 `sudo` / `tsu` | Corrupted PATH or shell rc file never loads |
+| 🔧 `sudo` / `tsu` | Not found — PATH is wrong or rc file never loads |
 | 📦 PATH duplicated | Naive env-copy makes rc file append paths multiple times |
 | 🐚 Wrong shell | Ignoring the user's configured shell preference |
 
@@ -65,7 +65,7 @@ You get a **broken impostor** that looks like one.
 
 ## ⚡ Try It Now — No Install Required
 
-Run this in a **root shell** (SSH, ADB, or any root app) to try `txsu` without touching your system:
+Run this in a **root shell** (ADB, KSU shell, Magisk shell, or any root app) to try `txsu` without touching your system:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
@@ -173,7 +173,7 @@ txsu
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│              ROOT SESSION  (SSH / ADB / root app)               │
+│         ROOT SESSION  (ADB / KSU / Magisk / root app)           │
 │                    uid=0 · env=root's env                       │
 └────────────────────────────┬────────────────────────────────────┘
                              │
@@ -284,7 +284,7 @@ txsu
                    │            storage            │
                    │   internet works              │
                    │   /sdcard works               │
-                   │   sudo / tsu works            │
+                   │   PATH correct, sudo/tsu findable   │
                    │   rc loaded exactly once      │
                    │   PATH clean, no duplicates   │
                     ───────────────────────────────
@@ -518,7 +518,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | `ANDROID_ROOT` | `/system` |
 | `ANDROID_DATA` | `/data` |
 | `ANDROID_STORAGE` | `/storage` |
-| `ANDROID_ASSETS` | `/system/app` |
+| `ANDROID_ASSETS` | `/system/app` *(mirrors ANDROID_ROOT; present for env completeness)* |
 | `ANDROID_ART_ROOT` | `/apex/com.android.art` |
 | `ANDROID_I18N_ROOT` | `/apex/com.android.i18n` |
 | `ANDROID_TZDATA_ROOT` | `/apex/com.android.tzdata` |
@@ -544,7 +544,7 @@ By providing only `PREFIX/bin` as the base PATH, the shell's rc file runs once o
 <details>
 <summary>💡 Why unset LD_LIBRARY_PATH?</summary>
 
-On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. However, some root environments — certain KSU builds, SSH daemon setups, or third-party root apps — may set it to point at system library paths. If that leaks into Termux's shell, the dynamic linker can pick up wrong `.so` files. Clearing it as a precaution ensures `libtermux-exec.so` operates in a clean linker environment regardless of where `txsu` was called from.
+On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. However, some root environments — certain KSU builds, or third-party root apps — may set it to point at system library paths. If that leaks into Termux's shell, the dynamic linker can pick up wrong `.so` files. Clearing it as a precaution ensures `libtermux-exec.so` operates in a clean linker environment regardless of where `txsu` was called from.
 
 </details>
 
