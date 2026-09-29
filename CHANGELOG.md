@@ -1,3 +1,7 @@
+## v1.6
+
+- docs: align README with script (soft SGID, -c mode, PATH, env claims); fix LANG default expansion (6227c11)
+
 ## v1.5
 
 - feat: -c passthrough, soft SGID, TERMUX__UID fix, SUPP_GROUPS cleanup (c342cec)
