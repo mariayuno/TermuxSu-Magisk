@@ -1,9 +1,6 @@
 <div align="center">
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=48&duration=0&pause=0&color=00FF99&center=true&vCenter=true&repeat=false&width=300&height=80&lines=%24+txsu">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=48&duration=0&pause=0&color=00CC77&center=true&vCenter=true&repeat=false&width=300&height=80&lines=%24+txsu" alt="txsu" height="80">
-</picture>
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=72&duration=0&pause=0&color=00FF99&center=true&vCenter=true&repeat=false&width=600&height=120&lines=%24+txsu" alt="txsu" width="600" height="120">
 
 <p><strong>Drop into a proper Termux shell from any root session.</strong></p>
 
@@ -11,11 +8,18 @@
 
 <br>
 
+<!-- VERSION_BADGE_START -->
+<img alt="Version" src="https://img.shields.io/badge/version-v1.0-7c3aed?style=for-the-badge&logo=github&logoColor=white">
+<!-- VERSION_BADGE_END -->
+
+&nbsp;
 [![License: MIT](https://img.shields.io/badge/License-MIT-00bfff?style=for-the-badge&labelColor=0d1117)](LICENSE)
 &nbsp;
-![Android](https://img.shields.io/badge/Android-7%2B-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84)
+![Termux](https://img.shields.io/badge/Termux-F-Droid%20%7C%20GitHub-000000?style=for-the-badge&labelColor=0d1117&logo=termux&logoColor=00ff99)
 &nbsp;
-![Root](https://img.shields.io/badge/Magisk%20%7C%20KSU%20%7C%20APatch-rooted-ff6b6b?style=for-the-badge&labelColor=0d1117)
+![Android](https://img.shields.io/badge/Android-rooted-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84)
+&nbsp;
+![Root](https://img.shields.io/badge/Magisk%20%7C%20KSU%20%7C%20APatch-root-ff6b6b?style=for-the-badge&labelColor=0d1117)
 &nbsp;
 ![Shell](https://img.shields.io/badge/bash%20%7C%20zsh%20%7C%20any-shell-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948)
 
@@ -66,59 +70,87 @@ Run this in a **root shell** (SSH, ADB, or any root app) to try `txsu` without t
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
 ```
 
-This curls the script into `/tmp` and runs it directly. Nothing is written to your system. If it works, pick an install method below to make it permanent.
+Nothing is written to your system. If it works, pick a method below to make it permanent.
 
 ---
 
 ## 📦 Install
 
-### Method 1 — Magisk Module *(survives reboots, cleanest)*
+<!-- INSTALL_ONELINER_START -->
+<table>
+<tr>
+<td valign="top" width="70%">
 
-There are no pre-built release zips. Build the flashable zip yourself from the repo:
+### One-liner — Flash from root shell *(recommended)*
+
+> Downloads the latest release zip and installs it in one command. Run in a root shell.
+
+**KernelSU / ResuKiSU**
 
 ```sh
-# On your PC or in Termux
-git clone https://github.com/mariayuno/TermuxSu-Magisk
-cd TermuxSu-Magisk
-
-# Files must sit at the root of the zip, not inside a subfolder
-zip -r ../TermuxSu-Magisk.zip .
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && /data/adb/ksud module install /tmp/txsu.zip
 ```
 
-Then transfer `TermuxSu-Magisk.zip` to your device and flash it:
+**Magisk**
 
-> **Magisk:** Magisk app → Modules tab → ➕ Install from storage → select the zip → Reboot
+```sh
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && magisk --install-module /tmp/txsu.zip
+```
+
+**APatch**
+
+```sh
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/txsu-latest.zip && /data/adb/apd module install /tmp/txsu.zip
+```
+
+</td>
+<td valign="top" align="right" width="30%">
+
+<p align="right">
+<img alt="Version" src="https://img.shields.io/badge/v1.0-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-txsu--v1.0.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Version Code" src="https://img.shields.io/badge/version%20code-1-0891b2?style=for-the-badge">
+</p>
+
+</td>
+</tr>
+</table>
+<!-- INSTALL_ONELINER_END -->
+
+### Method 2 — Flash from Manager UI
+
+Download the zip from [Releases](https://github.com/mariayuno/TermuxSu-Magisk/releases/latest) and flash it:
+
+> **Magisk:** Magisk app → Modules tab → ➕ Install from storage → select zip → Reboot
 >
 > **KernelSU / APatch:** same flow inside their respective manager apps
 
-After reboot, `txsu` is available from any root shell.
+Magisk and KernelSU also support in-app auto-update via `update.json` — the module will show an update prompt when a new version is released.
 
----
+### Method 3 — No-Flash Persistent Install *(no reboot needed)*
 
-### Method 2 — No-Flash Persistent Install *(no reboot needed)*
-
-Run this in a **root shell** to install `txsu` permanently into `/data/adb/` without flashing anything:
+Run this in a **root shell** to drop `txsu` into `/data/adb/` without flashing anything:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /data/adb/txsu && chmod 755 /data/adb/txsu
 ```
 
-Then call it by full path each time, or add `/data/adb` to your root shell's PATH:
+Then call it by full path, or add `/data/adb` to PATH:
 
 ```sh
 # Run directly
 /data/adb/txsu
 
-# Or add to PATH in your root shell's profile (e.g. /system/etc/mkshrc or ~/.bashrc as root)
+# Or add to root shell profile
 export PATH="/data/adb:$PATH"
 txsu
 ```
 
-> `/data/adb/` persists across reboots and is not wiped by OTA updates. It is not on PATH by default — you either call it by full path or add it yourself.
+> `/data/adb/` persists across reboots and is not wiped by OTA updates.
 
 ---
 
-> **Termux prerequisite:** at least one shell must be installed. Bash ships with Termux by default and requires no extra setup. To use a different shell, install it and run `chsh -s zsh` (or `bash`, `fish`, etc.) inside Termux — this writes `~/.termux/shell`, which `txsu` reads to pick the right shell. If you've never run `chsh`, `txsu` falls back to bash.
+> **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash.
 
 ---
 

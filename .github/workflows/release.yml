@@ -1,0 +1,372 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'update.json'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ----------------------------------------------------------------
+      # Version bump
+      # module.prop uses vMAJOR.MINOR format.
+      # Minor increments each release. Rolls to next major at .9.
+      # ----------------------------------------------------------------
+
+      - name: Bump version in module.prop
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROP="module.prop"
+          [[ -f "$PROP" ]] || { echo "ERROR: $PROP not found."; exit 1; }
+
+          OLD_CODE=$(grep '^versionCode=' "$PROP" | cut -d= -f2)
+          CURRENT_VERSION=$(grep '^version=' "$PROP" | cut -d= -f2)
+
+          [[ -n "$OLD_CODE" && -n "$CURRENT_VERSION" ]] \
+            || { echo "ERROR: Could not read version/versionCode from $PROP."; exit 1; }
+
+          [[ "$OLD_CODE" =~ ^[0-9]+$ ]] \
+            || { echo "ERROR: Invalid versionCode: $OLD_CODE"; exit 1; }
+
+          NEW_CODE=$((OLD_CODE + 1))
+
+          if [[ "$CURRENT_VERSION" =~ ^v([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+          else
+            echo "ERROR: Invalid version format: $CURRENT_VERSION (expected vMAJOR.MINOR)"
+            exit 1
+          fi
+
+          if (( MINOR >= 9 )); then
+            NEW_MAJOR=$((MAJOR + 1))
+            NEW_MINOR=0
+          else
+            NEW_MAJOR=$MAJOR
+            NEW_MINOR=$((MINOR + 1))
+          fi
+
+          NEW_VERSION="v${NEW_MAJOR}.${NEW_MINOR}"
+
+          sed -i "s/^version=.*/version=${NEW_VERSION}/" "$PROP"
+          sed -i "s/^versionCode=.*/versionCode=${NEW_CODE}/" "$PROP"
+
+          echo "version=${NEW_VERSION}"      >> "$GITHUB_OUTPUT"
+          echo "version_code=${NEW_CODE}"   >> "$GITHUB_OUTPUT"
+
+          echo "Version:     ${CURRENT_VERSION} -> ${NEW_VERSION}"
+          echo "VersionCode: ${OLD_CODE} -> ${NEW_CODE}"
+
+      # ----------------------------------------------------------------
+      # Release metadata
+      # ----------------------------------------------------------------
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          TAG="${VERSION}"
+          NAME="txsu ${VERSION}"
+          ARTIFACT="txsu-${VERSION}.zip"
+
+          echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}"         >> "$GITHUB_OUTPUT"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+
+          echo "Tag:      ${TAG}"
+          echo "Name:     ${NAME}"
+          echo "Artifact: ${ARTIFACT}"
+
+      # ----------------------------------------------------------------
+      # update.json — consumed by Magisk / KSU / APatch for auto-update
+      # ----------------------------------------------------------------
+
+      - name: Update update.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          ZIP_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+          CHANGELOG_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/CHANGELOG.md"
+
+          cat > update.json <<EOF
+          {
+            "version": "${VERSION}",
+            "versionCode": ${VERSION_CODE},
+            "zipUrl": "${ZIP_URL}",
+            "changelog": "${CHANGELOG_URL}"
+          }
+          EOF
+
+          echo "update.json:"
+          cat update.json
+
+      # ----------------------------------------------------------------
+      # Changelog
+      # ----------------------------------------------------------------
+
+      - name: Generate changelog
+        id: changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          RANGE=$( [[ -n "$LAST_TAG" ]] && echo "${LAST_TAG}..HEAD" || echo "HEAD" )
+
+          LOG=$(git log "$RANGE" \
+            --pretty=format:"- %s (%h)" \
+            --no-merges \
+            | grep -v '^- chore: bump version' || true)
+
+          [[ -n "$LOG" ]] || LOG="- Minor update"
+
+          VERSION="${{ steps.bump.outputs.version }}"
+
+          {
+            echo "## What's changed"
+            echo
+            echo "$LOG"
+            echo
+            echo "## Checksums"
+            echo
+            echo '```'
+            echo "SHA256 checksum will appear here after build."
+            echo '```'
+          } > release_notes.md
+
+          NEW_ENTRY="## ${VERSION}"$'\n\n'"${LOG}"$'\n'
+
+          if [[ -f CHANGELOG.md ]]; then
+            { echo "$NEW_ENTRY"; cat CHANGELOG.md; } > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+          else
+            printf '%s\n' "$NEW_ENTRY" > CHANGELOG.md
+          fi
+
+          echo "notes_file=release_notes.md" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------------
+      # README — auto-update two marker-delimited sections:
+      #   <!-- VERSION_BADGE_START --> ... <!-- VERSION_BADGE_END -->
+      #   <!-- INSTALL_ONELINER_START --> ... <!-- INSTALL_ONELINER_END -->
+      # Everything outside those markers is left untouched.
+      # ----------------------------------------------------------------
+
+      - name: Update README version badge and install banner
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          README="README.md"
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}/${ARTIFACT}"
+          LATEST_URL="https://github.com/${{ github.repository }}/releases/latest/download/${ARTIFACT}"
+
+          VERSION_START='<!-- VERSION_BADGE_START -->'
+          VERSION_END='<!-- VERSION_BADGE_END -->'
+          INSTALL_START='<!-- INSTALL_ONELINER_START -->'
+          INSTALL_END='<!-- INSTALL_ONELINER_END -->'
+
+          # Validate markers
+          for MARKER in "$VERSION_START" "$VERSION_END" "$INSTALL_START" "$INSTALL_END"; do
+            COUNT=$(grep -Fxc "$MARKER" "$README" || true)
+            [[ "$COUNT" == "1" ]] || { echo "ERROR: marker not found exactly once: $MARKER"; exit 1; }
+          done
+
+          awk \
+            -v vs="$VERSION_START"   -v ve="$VERSION_END" \
+            -v is="$INSTALL_START"   -v ie="$INSTALL_END" \
+            -v version="$VERSION"    -v version_code="$VERSION_CODE" \
+            -v artifact="$ARTIFACT"  -v release_url="$RELEASE_URL" \
+            -v latest_url="$LATEST_URL" \
+            '
+            # Version badge block
+            $0 == vs {
+              print
+              print "<img alt=\"Version\" src=\"https://img.shields.io/badge/version-" version "-7c3aed?style=for-the-badge&logo=github&logoColor=white\">"
+              print ve
+              in_v=1; next
+            }
+            $0 == ve { if (in_v) { in_v=0; next } }
+
+            # Install banner block
+            $0 == is {
+              print
+              print "<table>"
+              print "<tr>"
+              print "<td valign=\"top\" width=\"70%\">"
+              print ""
+              print "### One-liner — Flash from root shell *(recommended)*"
+              print ""
+              print "> Downloads the latest release zip and installs it in one command. Run in a root shell."
+              print ""
+              print "**KernelSU / ResuKiSU**"
+              print ""
+              print "```sh"
+              print "curl -Lo /tmp/txsu.zip " latest_url " && /data/adb/ksud module install /tmp/txsu.zip"
+              print "```"
+              print ""
+              print "**Magisk**"
+              print ""
+              print "```sh"
+              print "curl -Lo /tmp/txsu.zip " latest_url " && magisk --install-module /tmp/txsu.zip"
+              print "```"
+              print ""
+              print "**APatch**"
+              print ""
+              print "```sh"
+              print "curl -Lo /tmp/txsu.zip " latest_url " && /data/adb/apd module install /tmp/txsu.zip"
+              print "```"
+              print ""
+              print "</td>"
+              print "<td valign=\"top\" align=\"right\" width=\"30%\">"
+              print ""
+              print "<p align=\"right\">"
+              print "<img alt=\"Version\" src=\"https://img.shields.io/badge/" version "-7c3aed?style=for-the-badge&logo=github&logoColor=white\"><br>"
+              print "<img alt=\"Package\" src=\"https://img.shields.io/badge/package-" artifact "-2563eb?style=for-the-badge&logo=files&logoColor=white\"><br>"
+              print "<img alt=\"Version Code\" src=\"https://img.shields.io/badge/version%20code-" version_code "-0891b2?style=for-the-badge\">"
+              print "</p>"
+              print ""
+              print "</td>"
+              print "</tr>"
+              print "</table>"
+              print ""
+              in_i=1; next
+            }
+            $0 == ie { if (in_i) { in_i=0; print; next } }
+
+            !in_v && !in_i { print }
+            ' "$README" > "${README}.tmp"
+
+          mv "${README}.tmp" "$README"
+          echo "README updated."
+
+      # ----------------------------------------------------------------
+      # Build flashable zip
+      # ----------------------------------------------------------------
+
+      - name: Build flashable zip
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="${{ steps.meta.outputs.artifact }}"
+
+          zip -q -r "$ZIP" . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "$ZIP" \
+            -x "*.DS_Store" \
+            -x "*.swp" \
+            -x "*.bak" \
+            -x "release_notes.md" \
+            -x "*.tmp"
+
+          SHA256=$(sha256sum "$ZIP" | cut -d' ' -f1)
+
+          sed -i \
+            "s/SHA256 checksum will appear here after build\./SHA256  ${SHA256}  ${ZIP}/" \
+            release_notes.md
+
+          echo "zip=${ZIP}"       >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+
+          echo "Built:  $ZIP"
+          echo "SHA256: $SHA256"
+
+      # ----------------------------------------------------------------
+      # Consistency checks
+      # ----------------------------------------------------------------
+
+      - name: Final consistency check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.bump.outputs.version }}"
+          VERSION_CODE="${{ steps.bump.outputs.version_code }}"
+          ARTIFACT="${{ steps.meta.outputs.artifact }}"
+
+          # module.prop
+          ACTUAL_V=$(grep '^version=' module.prop | cut -d= -f2)
+          ACTUAL_VC=$(grep '^versionCode=' module.prop | cut -d= -f2)
+          [[ "$ACTUAL_V" == "$VERSION" ]]       || { echo "ERROR: module.prop version mismatch: $ACTUAL_V != $VERSION"; exit 1; }
+          [[ "$ACTUAL_VC" == "$VERSION_CODE" ]] || { echo "ERROR: module.prop versionCode mismatch"; exit 1; }
+
+          # update.json
+          grep -Fq "\"version\": \"${VERSION}\""    update.json || { echo "ERROR: update.json version wrong"; exit 1; }
+          grep -Fq "\"versionCode\": ${VERSION_CODE}" update.json || { echo "ERROR: update.json versionCode wrong"; exit 1; }
+
+          # zip
+          [[ -f "$ARTIFACT" ]] || { echo "ERROR: artifact not found: $ARTIFACT"; exit 1; }
+
+          # README
+          grep -Fq "$VERSION"  README.md || { echo "ERROR: README missing version"; exit 1; }
+          grep -Fq "$ARTIFACT" README.md || { echo "ERROR: README missing artifact name"; exit 1; }
+
+          echo "All checks passed."
+
+      # ----------------------------------------------------------------
+      # Commit bumped files back to main
+      # ----------------------------------------------------------------
+
+      - name: Commit version bump and generated files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add module.prop update.json CHANGELOG.md README.md
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+            git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      # ----------------------------------------------------------------
+      # GitHub Release
+      # ----------------------------------------------------------------
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          body_path: ${{ steps.changelog.outputs.notes_file }}
+          files: ${{ steps.build.outputs.zip }}
+          draft: false
+          prerelease: false

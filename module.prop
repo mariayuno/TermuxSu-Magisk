@@ -1,6 +1,7 @@
 id=txsu
 name=TermuxSu
-version=v4.0.0
-versionCode=400
+version=v1.0
+versionCode=1
 author=mariayuno
 description=Full Termux shell from any root session. Correct UID, groups, env, LD_PRELOAD. No SELinux hacks.
+updateJson=https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/update.json
