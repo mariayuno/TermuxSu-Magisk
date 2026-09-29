@@ -9,15 +9,6 @@
 <br>
 
 <!-- VERSION_BADGE_START -->
-<img alt="Version" src="https://img.shields.io/badge/version-v1.2-7c3aed?style=for-the-badge&logo=github&logoColor=white">
-&nbsp;
-<img alt="License" src="https://img.shields.io/badge/license-MIT-00bfff?style=for-the-badge&labelColor=0d1117">
-&nbsp;
-<img alt="Root" src="https://img.shields.io/badge/root-Magisk%20%7C%20KSU%20%7C%20APatch-ff6b6b?style=for-the-badge&labelColor=0d1117">
-&nbsp;
-<img alt="Shell" src="https://img.shields.io/badge/shell-bash%20%7C%20zsh%20%7C%20any-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948">
-&nbsp;
-<img alt="Android" src="https://img.shields.io/badge/android-rooted-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84">
 
 <br><br>
 
@@ -77,45 +68,25 @@ Nothing is written to your system. If it works, pick a method below to make it p
 ## 📦 Install
 
 <!-- INSTALL_ONELINER_START -->
-<table>
-<tr>
-<td valign="top" width="70%">
-
 ### One-liner — Flash from root shell *(recommended)*
-
 > Downloads the latest release zip and installs it in one command. Run in a root shell.
-
 **KernelSU / ResuKiSU**
-
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.2.zip && /data/adb/ksud module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.3.zip && /data/adb/ksud module install /tmp/txsu.zip
 ```
-
 **Magisk**
-
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.2.zip && magisk --install-module /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.3.zip && magisk --install-module /tmp/txsu.zip
 ```
-
 **APatch**
-
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.2.zip && /data/adb/apd module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v1.3.zip && /data/adb/apd module install /tmp/txsu.zip
 ```
-
-</td>
-<td valign="top" align="right" width="30%">
-
-<p align="right">
-<img alt="Version" src="https://img.shields.io/badge/v1.2-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
-<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-v1.2.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
-<img alt="Version Code" src="https://img.shields.io/badge/version%20code-3-0891b2?style=for-the-badge">
-</p>
-
-</td>
-</tr>
-</table>
-
+</td><td valign="top" align="right" width="30%"><p align="right">
+<img alt="Version" src="https://img.shields.io/badge/v1.3-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-v1.3.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Version Code" src="https://img.shields.io/badge/version%20code-4-0891b2?style=for-the-badge">
+</p></td></tr></table>
 <!-- INSTALL_ONELINER_END -->
 
 ### Method 2 — Flash from Manager UI
