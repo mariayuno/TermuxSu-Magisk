@@ -1,5 +1,9 @@
 ## v1.5
 
+- feat: -c passthrough, soft SGID, TERMUX__UID fix, SUPP_GROUPS cleanup (c342cec)
+
+## v1.5
+
 - feat: add `-c` command passthrough for non-interactive use (`txsu -c "cmd"`)
 - fix: `SGID` (`/storage`) is now a soft failure — warns and continues instead of dying
 - fix: `TERMUX__UID` now uses pre-computed `$TUID` directly instead of a subshell `$(id -u)`
