@@ -71,7 +71,7 @@ Run this in a **root shell** (ADB, a root terminal, or any root context) to try 
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
 ```
 
-Nothing is written to your system. If it works, pick a method below to make it permanent.
+Nothing is installed — the script is only saved to `/tmp/txsu` and run from there. If it works, pick a method below to make it permanent.
 
 ---
 
@@ -177,6 +177,8 @@ txsu -c "python3 /data/local/myscript.py"
 
 The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically before the command runs.
 
+Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any other arguments, including anything after `CMD`, are ignored, and without `-c` an interactive shell opens. If the shell exits non-zero, `txsu` prints `txsu: shell exited with status N` on stdout and exits with that status.
+
 ---
 
 > **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash.
@@ -235,6 +237,9 @@ The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically bef
             │      no                              │
             │       │                              │
             │   die("pkg install bash")            │
+            │                                      │
+            │   then: resolved shell executable?   │
+            │         no ──► die()                 │
              ──────────────┬───────────────────────
                            │
                            ▼
@@ -263,7 +268,7 @@ The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically bef
                    │  /system/bin/su             │
                    │    -g  TGID                 │  ← primary group
                    │    -G  IGID                 │  ← +inet
-                   │    -G  SGID                 │  ← +storage
+                   │    -G  SGID (if available)  │  ← +storage
                    │    TUID                     │  ← UID switch
                    │    /system/bin/sh -c '...'  │
                     ──────────────┬──────────────
@@ -275,7 +280,7 @@ The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically bef
                     │  export PREFIX      TERMUX_PREFIX          │
                     │  export ZDOTDIR     (if applicable)        │
                     │  export TERM        xterm-256color         │
-                    │  export LANG        en_US.UTF-8            │
+                    │  export LANG        ${LANG:-en_US.UTF-8}   │
                     │                                             │
                     │  export TERMUX__*   (rootfs, home, prefix, │
                     │                      uid)                  │
@@ -296,10 +301,10 @@ The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically bef
                                    │
                                    ▼
                     ┌──────────────────────────────┐
-                    │   exec  SHELL  -l  -i         │
-                    │                              │
-                    │   sources login config       │
-                    │   sources interactive config │
+                    │ no -c:  exec SHELL -l -i     │
+                    │   sources login + rc config  │
+                    │ -c CMD: exec SHELL -c "CMD"  │
+                    │   (no -l / -i passed)        │
                     └──────────────┬───────────────┘
                                    │
                     ───────────────▼───────────────
@@ -335,7 +340,11 @@ The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically bef
 | `TUID` | `stat '%u' TERMUX_DATA` | Termux app UID |
 | `TGID` | `stat '%g' TERMUX_DATA` | Termux app GID |
 | `IGID` | `stat '%g' /dev/socket/dnsproxyd` | Android `inet` group — gates network socket access |
-| `SGID` | `stat '%g' /storage` | Android storage group — gates sdcard/FUSE access |
+| `SGID` | `stat '%g' /storage` | Android storage group — gates sdcard/FUSE access *(soft failure: warns and continues without it)* |
+| `TERMUX_SHELL_LINK` | `$TERMUX_HOME/.termux/shell` | Path of the user's shell preference (set by `chsh`) |
+| `TXSU_CMD` | from `-c`, else empty | Command for non-interactive mode; passed to the inner shell via the environment |
+| `SUPP_GROUPS` | `-G IGID [-G SGID]` | Supplementary-group arguments for `su` (intentionally left unquoted) |
+| `RC` | exit status of `su` | Reported if non-zero, then returned by `txsu` |
 
 ---
 
@@ -373,7 +382,7 @@ Without `libtermux-exec.so` set as `LD_PRELOAD`, Termux binaries fail to execute
 ```sh
 TERMUX_SHELL_LINK="$TERMUX_HOME/.termux/shell"
 if [ -x "$TERMUX_SHELL_LINK" ]; then
-    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" || echo "$TERMUX_SHELL_LINK")"
+    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null || echo "$TERMUX_SHELL_LINK")"
 elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
     TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
 elif [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
@@ -381,6 +390,8 @@ elif [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
 else
     die "no usable shell found — install one: pkg install bash"
 fi
+
+[ -x "$TERMUX_SHELL" ] || die "resolved shell '$TERMUX_SHELL' is not executable"
 ```
 
 ```
@@ -404,7 +415,7 @@ fi
 
 `~/.termux/shell` is how Termux itself stores the user's shell preference when they run `chsh`. It is a symlink pointing to the chosen shell binary. Reading it first means `txsu` respects whatever the user has already configured — the same shell their normal Termux sessions use.
 
-**Bash is Termux's actual default**, not zsh. Termux ships with bash pre-installed; zsh is an optional package. The fallback order reflects reality: most Termux users have bash, fewer have zsh. Previously this was backwards in the script.
+**Bash is Termux's actual default**, not zsh. Termux ships with bash pre-installed; zsh is an optional package. The fallback order reflects reality: most Termux users have bash, fewer have zsh.
 
 </details>
 
@@ -441,7 +452,8 @@ Setting `ZDOTDIR` unconditionally for all zsh users would actively break anyone 
 TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
 TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
 IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
-SGID="$(stat -c '%g' /storage)"              || die "cannot determine storage group"
+SGID="$(stat -c '%g' /storage 2>/dev/null)" \
+    || { echo "txsu: warning: cannot determine storage group, continuing without it" >&2; SGID=""; }
 ```
 
 ```
@@ -479,7 +491,7 @@ GIDs are not fixed across Android versions, OEM builds, or custom ROMs. Reading 
 | `-G IGID` | inet GID | Adds `inet` supplementary group → network socket access |
 | `-G SGID` | storage GID | Adds `storage` supplementary group → sdcard/FUSE access *(omitted with a warning if `/storage` is unavailable)* |
 | `TUID` | Termux UID | Switches UID from 0 to Termux's UID |
-| `/system/bin/sh -c '...'` | | Clean intermediate shell; builds env from scratch before exec |
+| `/system/bin/sh -c '...'` | | Intermediate shell; sets the env explicitly before exec |
 
 `$SUPP_GROUPS` is built dynamically and intentionally left unquoted so shell word splitting passes each `-G <gid>` pair as separate arguments. `inet` is always required and is a hard failure; `storage` is best-effort — if `/storage` is absent on the device, a warning is printed and the shell still opens without it.
 
@@ -506,7 +518,7 @@ Detecting the GID via `stat -c '%g' /storage` reads it from the mount point bein
 <details>
 <summary>💡 Why /system/bin/sh -c as an intermediate step?</summary>
 
-`su ... TUID /system/bin/sh -c '...'` drops privileges first, then the inner `sh -c` string builds the entire environment from scratch. The root shell's environment is completely discarded — `sh -c` starts clean. No root paths, no stale linker variables, no leaked values can contaminate the Termux session. The `exec` at the end replaces the intermediate `sh` with the final shell process, leaving no wrapper.
+`su ... TUID /system/bin/sh -c '...'` drops privileges first, then the inner `sh -c` string sets the environment explicitly. It does not clear it: the inner shell inherits whatever `su` passes on, the variables listed below are overridden, and `LD_LIBRARY_PATH` is unset (in `-c` mode, `TXSU_CMD` reaches the inner shell this way). The `exec` at the end replaces the intermediate `sh` with the final shell process, leaving no wrapper.
 
 </details>
 
@@ -522,11 +534,11 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 |---|---|
 | `HOME` | `/data/data/com.termux/files/home` |
 | `PREFIX` | `/data/data/com.termux/files/usr` |
-| `SHELL` | user's shell from `~/.termux/shell` |
+| `SHELL` | the resolved shell (target of `~/.termux/shell`, else the bash/zsh fallback) |
 | `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG layout only)* |
 | `TMPDIR` | `$PREFIX/tmp` |
 | `TERM` | `xterm-256color` |
-| `LANG` | `${LANG:-en_US.UTF-8}` |
+| `LANG` | inherited from the calling environment if set, else `en_US.UTF-8` |
 
 **🔵 Group B — Termux Internal Vars**
 
@@ -546,7 +558,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | `ANDROID_ROOT` | `/system` |
 | `ANDROID_DATA` | `/data` |
 | `ANDROID_STORAGE` | `/storage` |
-| `ANDROID_ASSETS` | `/system/app` *(mirrors ANDROID_ROOT; present for env completeness)* |
+| `ANDROID_ASSETS` | `/system/app` *(fixed value; present for env completeness)* |
 | `ANDROID_ART_ROOT` | `/apex/com.android.art` |
 | `ANDROID_I18N_ROOT` | `/apex/com.android.i18n` |
 | `ANDROID_TZDATA_ROOT` | `/apex/com.android.tzdata` |
@@ -556,7 +568,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 
 | Variable | Value |
 |---|---|
-| `PATH` | `$PREFIX/bin` → `$PREFIX/bin/applets` → `/system/bin` → `/system/xbin` → `/system/sbin` → `/sbin` |
+| `PATH` | `$PREFIX/bin` → `$PREFIX/bin/applets` → `/system/bin` → `/system/xbin` → `/system/sbin` → `/sbin` → `/sbin/bin` |
 | `LD_LIBRARY_PATH` | *(unset — cleared in case root session had it set)* |
 | `LD_PRELOAD` | `$PREFIX/lib/libtermux-exec.so` |
 
@@ -565,7 +577,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 
 If the env were copied from a live Termux process, it would contain a PATH that the shell's rc file had already expanded — with npm-global, mason, `.local/bin`, etc. When the new shell then sourced its rc file, those paths would be appended again, resulting in duplicates or worse, triplicates.
 
-By providing only `PREFIX/bin` as the base PATH, the shell's rc file runs once on a clean foundation, adding each custom path exactly once. This is identical to what happens when you open a normal Termux terminal.
+By providing only a fixed base PATH (`PREFIX/bin` first, then applets and system directories) with no user additions, the shell's rc file runs once on a clean foundation, adding each custom path exactly once. This is identical to what happens when you open a normal Termux terminal.
 
 </details>
 
@@ -585,12 +597,14 @@ On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. However, some r
 
 Together they produce the same experience as opening a native Termux terminal. Either flag alone is insufficient — without `-l`, login-level config is skipped; without `-i`, the shell may be treated as non-interactive and skip the rc file.
 
+In `-c` mode neither flag is passed: the script runs `SHELL -c "$TXSU_CMD"`.
+
 </details>
 
 <details>
 <summary>💡 Why is TERMUX__USER_ID not set?</summary>
 
-`TERMUX__USER_ID` is supposed to reflect the Android multi-user profile ID (0 for the primary user, non-zero for work profiles and secondary users). Hardcoding it to 0 would silently break work profile setups. The value is already set correctly by Termux itself in the `termux.env` file it writes at `$PREFIX/etc/termux/termux.env` — there is no need for `txsu` to guess it.
+`TERMUX__USER_ID` is supposed to reflect the Android multi-user profile ID (0 for the primary user, non-zero for work profiles and secondary users). Hardcoding it to 0 would silently break work profile setups. `txsu` neither sets nor reads it, so it is left unset rather than guessed.
 
 </details>
 
@@ -598,9 +612,9 @@ Together they produce the same experience as opening a native Termux terminal. E
 
 ## 🔒 Security Notes
 
-- **No external data sourced** — env is built from hardcoded paths and integer `stat` output only
-- **No Termux filesystem read** during privilege escalation — not `passwd`, not cache files, not `/proc/<pid>/environ`
-- **No root environment inherited** — `sh -c` starts with a clean slate
+- **Only two outside inputs** — the shell path (target of `~/.termux/shell`, interpolated in single quotes and run as the Termux UID) and, with `-c`, the command string; everything else is hardcoded paths and integer `stat` output
+- **No Termux data parsed or sourced** — not `passwd`, not cache files, not `/proc/<pid>/environ`; only existence/symlink checks (`~/.termux/shell`, `~/.config/zsh`, `libtermux-exec.so`) run as root before `su`
+- **Environment overridden, not cleared** — the listed variables are set explicitly and `LD_LIBRARY_PATH` is unset; anything else `su` passes through is left as is
 - **No SELinux domain switching** — no `runcon`, no domain impersonation
 - **Injection-immune GID detection** — `stat` returns integers; integers cannot contain shell syntax
 - **No cache files** — nothing written to disk, nothing sourced back
