@@ -1,21 +1,23 @@
 <div align="center">
 
-<h1>
-  <img src="https://img.shields.io/badge/%24-txsu-00ff99?style=for-the-badge&labelColor=0d1117&color=00ff99&logo=gnubash&logoColor=00ff99" alt="txsu">
-</h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=48&duration=0&pause=0&color=00FF99&center=true&vCenter=true&repeat=false&width=300&height=80&lines=%24+txsu">
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=48&duration=0&pause=0&color=00CC77&center=true&vCenter=true&repeat=false&width=300&height=80&lines=%24+txsu" alt="txsu" height="80">
+</picture>
 
-**Drop into a proper Termux shell from any root session.**
+<p><strong>Drop into a proper Termux shell from any root session.</strong></p>
 
-```sh
-txsu
-```
+<p><code>ssh phone</code> &nbsp;·&nbsp; <code>adb shell</code> &nbsp;·&nbsp; any root app &nbsp;→&nbsp; <strong>one command</strong></p>
 
-*SSH into your phone, ADB into it, `su` from another app — one command gives you your full configured Termux environment with correct identity, networking, storage, and shell init.*
+<br>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-00bfff?style=flat-square&labelColor=0d1117)](LICENSE)
-![Android](https://img.shields.io/badge/Android-7%2B-3ddc84?style=flat-square&labelColor=0d1117)
-![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KSU%20%7C%20APatch-ff6b6b?style=flat-square&labelColor=0d1117)
-![Shell](https://img.shields.io/badge/Shell-bash%20%7C%20zsh%20%7C%20any-f7c948?style=flat-square&labelColor=0d1117)
+[![License: MIT](https://img.shields.io/badge/License-MIT-00bfff?style=for-the-badge&labelColor=0d1117)](LICENSE)
+&nbsp;
+![Android](https://img.shields.io/badge/Android-7%2B-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84)
+&nbsp;
+![Root](https://img.shields.io/badge/Magisk%20%7C%20KSU%20%7C%20APatch-rooted-ff6b6b?style=for-the-badge&labelColor=0d1117)
+&nbsp;
+![Shell](https://img.shields.io/badge/bash%20%7C%20zsh%20%7C%20any-shell-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948)
 
 </div>
 
@@ -452,46 +454,49 @@ Detecting the GID via `stat -c '%g' /storage` reads it from the mount point bein
 
 Inside the inner `sh -c`, the environment is built from hardcoded known-good values before `exec`ing the shell:
 
-```
-  GROUP A — Termux identity
-  ────────────────────────────────────────────────────────────────
-  HOME          = /data/data/com.termux/files/home
-  PREFIX        = /data/data/com.termux/files/usr
-  ZDOTDIR       = ~/.config/zsh      (zsh + XDG layout only)
-  SHELL         = user's configured shell (from ~/.termux/shell)
-  TMPDIR        = PREFIX/tmp
-  TERM          = xterm-256color
-  LANG          = ${LANG:-en_US.UTF-8}
+**🟢 Group A — Termux Identity**
 
-  GROUP B — Termux internal vars (used by Termux itself and plugins)
-  ────────────────────────────────────────────────────────────────
-  TERMUX__ROOTFS_DIR       = /data/data/com.termux/files
-  TERMUX__HOME             = …/files/home
-  TERMUX__PREFIX           = …/files/usr
-  TERMUX__UID              = $(id -u)   ← evaluated inside inner shell
-  TERMUX_APP__PACKAGE_NAME = com.termux
-  TERMUX_APP__DATA_DIR     = /data/data/com.termux
+| Variable | Value |
+|---|---|
+| `HOME` | `/data/data/com.termux/files/home` |
+| `PREFIX` | `/data/data/com.termux/files/usr` |
+| `SHELL` | user's shell from `~/.termux/shell` |
+| `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG layout only)* |
+| `TMPDIR` | `$PREFIX/tmp` |
+| `TERM` | `xterm-256color` |
+| `LANG` | `${LANG:-en_US.UTF-8}` |
 
-  GROUP C — Android system paths
-  ────────────────────────────────────────────────────────────────
-  ANDROID_ROOT          = /system
-  ANDROID_DATA          = /data
-  ANDROID_STORAGE       = /storage
-  ANDROID_ASSETS        = /system/app
-  ANDROID_ART_ROOT      = /apex/com.android.art
-  ANDROID_I18N_ROOT     = /apex/com.android.i18n
-  ANDROID_TZDATA_ROOT   = /apex/com.android.tzdata
-  EXTERNAL_STORAGE      = /sdcard
+**🔵 Group B — Termux Internal Vars**
 
-  GROUP D — PATH and linker
-  ────────────────────────────────────────────────────────────────
-  PATH     = PREFIX/bin : PREFIX/bin/applets :
-             /system/bin : /system/xbin :
-             /system/sbin : /sbin : /sbin/bin
+| Variable | Value |
+|---|---|
+| `TERMUX__ROOTFS_DIR` | `/data/data/com.termux/files` |
+| `TERMUX__HOME` | `…/files/home` |
+| `TERMUX__PREFIX` | `…/files/usr` |
+| `TERMUX__UID` | `$(id -u)` *(evaluated at runtime inside inner shell)* |
+| `TERMUX_APP__PACKAGE_NAME` | `com.termux` |
+| `TERMUX_APP__DATA_DIR` | `/data/data/com.termux` |
 
-  unset LD_LIBRARY_PATH       ← clear in case root session had it set
-  LD_PRELOAD = libtermux-exec.so
-```
+**🟠 Group C — Android System Paths**
+
+| Variable | Value |
+|---|---|
+| `ANDROID_ROOT` | `/system` |
+| `ANDROID_DATA` | `/data` |
+| `ANDROID_STORAGE` | `/storage` |
+| `ANDROID_ASSETS` | `/system/app` |
+| `ANDROID_ART_ROOT` | `/apex/com.android.art` |
+| `ANDROID_I18N_ROOT` | `/apex/com.android.i18n` |
+| `ANDROID_TZDATA_ROOT` | `/apex/com.android.tzdata` |
+| `EXTERNAL_STORAGE` | `/sdcard` |
+
+**🔴 Group D — PATH & Linker**
+
+| Variable | Value |
+|---|---|
+| `PATH` | `$PREFIX/bin` → `$PREFIX/bin/applets` → `/system/bin` → `/system/xbin` → `/system/sbin` → `/sbin` |
+| `LD_LIBRARY_PATH` | *(unset — cleared in case root session had it set)* |
+| `LD_PRELOAD` | `$PREFIX/lib/libtermux-exec.so` |
 
 <details>
 <summary>💡 Why is PATH only the base set — no user additions?</summary>
