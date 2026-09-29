@@ -213,7 +213,6 @@ jobs:
             $0 == vs {
               print
               print "<img alt=\"Version\" src=\"https://img.shields.io/badge/version-" version "-7c3aed?style=for-the-badge&logo=github&logoColor=white\">"
-              print ve
               in_v=1; next
             }
             $0 == ve { if (in_v) { in_v=0; next } }

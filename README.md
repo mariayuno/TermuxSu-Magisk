@@ -1,27 +1,36 @@
 <div align="center">
 
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=72&duration=0&pause=0&color=00FF99&center=true&vCenter=true&repeat=false&width=600&height=120&lines=%24+txsu" alt="txsu" width="600" height="120">
+```
+ _            _    _ 
+| |___  ___  | |  | |
+| __\ \/ /\_\| |  | |
+| |_ >  <\_/| |__| |
+ \__/_/\_\  |____|_|
+```
 
-<p><strong>Drop into a proper Termux shell from any root session.</strong></p>
+# `$ txsu`
 
-<p><code>ssh phone</code> &nbsp;·&nbsp; <code>adb shell</code> &nbsp;·&nbsp; any root app &nbsp;→&nbsp; <strong>one command</strong></p>
+**Drop into a proper Termux shell from any root session.**
+
+`ssh phone` &nbsp;·&nbsp; `adb shell` &nbsp;·&nbsp; any root app &nbsp;→&nbsp; **one command**
 
 <br>
 
 <!-- VERSION_BADGE_START -->
 <img alt="Version" src="https://img.shields.io/badge/version-v1.1-7c3aed?style=for-the-badge&logo=github&logoColor=white">
 <!-- VERSION_BADGE_END -->
+&nbsp;
+<img alt="License" src="https://img.shields.io/badge/license-MIT-00bfff?style=for-the-badge&labelColor=0d1117">
+&nbsp;
+<img alt="Root" src="https://img.shields.io/badge/root-Magisk%20%7C%20KSU%20%7C%20APatch-ff6b6b?style=for-the-badge&labelColor=0d1117">
+&nbsp;
+<img alt="Shell" src="https://img.shields.io/badge/shell-bash%20%7C%20zsh%20%7C%20any-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948">
+&nbsp;
+<img alt="Android" src="https://img.shields.io/badge/android-rooted-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84">
 
-&nbsp;
-[![License: MIT](https://img.shields.io/badge/License-MIT-00bfff?style=for-the-badge&labelColor=0d1117)](LICENSE)
-&nbsp;
-![Termux](https://img.shields.io/badge/Termux-F-Droid%20%7C%20GitHub-000000?style=for-the-badge&labelColor=0d1117&logo=termux&logoColor=00ff99)
-&nbsp;
-![Android](https://img.shields.io/badge/Android-rooted-3ddc84?style=for-the-badge&labelColor=0d1117&logo=android&logoColor=3ddc84)
-&nbsp;
-![Root](https://img.shields.io/badge/Magisk%20%7C%20KSU%20%7C%20APatch-root-ff6b6b?style=for-the-badge&labelColor=0d1117)
-&nbsp;
-![Shell](https://img.shields.io/badge/bash%20%7C%20zsh%20%7C%20any-shell-f7c948?style=for-the-badge&labelColor=0d1117&logo=gnubash&logoColor=f7c948)
+<br><br>
+
+by **[Maria Yuno](https://mariayuno.neocities.org/)** &nbsp;·&nbsp; [`mariayuno001@proton.me`](mailto:mariayuno001@proton.me)
 
 </div>
 
