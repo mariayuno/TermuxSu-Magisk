@@ -90,7 +90,7 @@ jobs:
           VERSION="${{ steps.bump.outputs.version }}"
           TAG="${VERSION}"
           NAME="txsu ${VERSION}"
-          ARTIFACT="txsu-${VERSION}.zip"
+          ARTIFACT="TermuxSu-${VERSION}.zip"
 
           echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
           echo "name=${NAME}"         >> "$GITHUB_OUTPUT"
