@@ -1,3 +1,8 @@
+## v1.4
+
+- fix: remove tsu alias (conflicts with tsu tool) (35f8f4e)
+- docs: restore static badges outside VERSION_BADGE block, add aliases table (4dd9f23)
+
 ## v1.3
 
 - chore: trigger release (19cc4f1)
