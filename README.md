@@ -166,6 +166,17 @@ The module installs several aliases alongside `txsu` — all invoke the same scr
 
 All land you in the same full Termux environment.
 
+### Non-interactive use
+
+`txsu` also accepts `-c` to run a single command and exit:
+
+```sh
+txsu -c "pkg upgrade -y"
+txsu -c "python3 /data/local/myscript.py"
+```
+
+The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically before the command runs.
+
 ---
 
 > **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash.
@@ -456,8 +467,7 @@ GIDs are not fixed across Android versions, OEM builds, or custom ROMs. Reading 
 ```sh
 "$SU" \
     -g "$TGID" \
-    -G "$IGID" \
-    -G "$SGID" \
+    $SUPP_GROUPS \
     "$TUID" \
     /system/bin/sh \
     -c "..."
@@ -467,9 +477,11 @@ GIDs are not fixed across Android versions, OEM builds, or custom ROMs. Reading 
 |---|---|---|
 | `-g TGID` | Termux GID | Sets primary group to Termux's GID |
 | `-G IGID` | inet GID | Adds `inet` supplementary group → network socket access |
-| `-G SGID` | storage GID | Adds `storage` supplementary group → sdcard/FUSE access |
+| `-G SGID` | storage GID | Adds `storage` supplementary group → sdcard/FUSE access *(omitted with a warning if `/storage` is unavailable)* |
 | `TUID` | Termux UID | Switches UID from 0 to Termux's UID |
 | `/system/bin/sh -c '...'` | | Clean intermediate shell; builds env from scratch before exec |
+
+`$SUPP_GROUPS` is built dynamically and intentionally left unquoted so shell word splitting passes each `-G <gid>` pair as separate arguments. `inet` is always required and is a hard failure; `storage` is best-effort — if `/storage` is absent on the device, a warning is printed and the shell still opens without it.
 
 <details>
 <summary>💡 Why does the missing inet group break networking?</summary>
@@ -523,7 +535,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | `TERMUX__ROOTFS_DIR` | `/data/data/com.termux/files` |
 | `TERMUX__HOME` | `…/files/home` |
 | `TERMUX__PREFIX` | `…/files/usr` |
-| `TERMUX__UID` | `$(id -u)` *(evaluated at runtime inside inner shell)* |
+| `TERMUX__UID` | Termux UID *(substituted directly from `stat` output — no subshell)* |
 | `TERMUX_APP__PACKAGE_NAME` | `com.termux` |
 | `TERMUX_APP__DATA_DIR` | `/data/data/com.termux` |
 

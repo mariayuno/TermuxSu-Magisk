@@ -1,3 +1,11 @@
+## v1.5
+
+- feat: add `-c` command passthrough for non-interactive use (`txsu -c "cmd"`)
+- fix: `SGID` (`/storage`) is now a soft failure — warns and continues instead of dying
+- fix: `TERMUX__UID` now uses pre-computed `$TUID` directly instead of a subshell `$(id -u)`
+- fix: `$SUPP_GROUPS` built dynamically; intentional unquoted word splitting documented
+- docs: update README to reflect all of the above
+
 ## v1.4
 
 - fix: remove tsu alias (conflicts with tsu tool) (35f8f4e)

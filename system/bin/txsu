@@ -48,12 +48,27 @@ esac
 TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
 TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
 IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
-SGID="$(stat -c '%g' /storage)"              || die "cannot determine storage group"
+SGID="$(stat -c '%g' /storage 2>/dev/null)" \
+    || { echo "txsu: warning: cannot determine storage group, continuing without it" >&2; SGID=""; }
 
+# -c passthrough: pass the command via env var to avoid quoting issues
+# through the su -c "..." shell layer.
+TXSU_CMD=""
+if [ "$1" = "-c" ]; then
+    [ -n "$2" ] || die "-c requires an argument"
+    TXSU_CMD="$2"
+    export TXSU_CMD
+fi
+
+SUPP_GROUPS="-G $IGID"
+[ -n "$SGID" ] && SUPP_GROUPS="$SUPP_GROUPS -G $SGID"
+
+# $SUPP_GROUPS is intentionally unquoted: we need word splitting so that
+# "-G 1234 -G 5678" expands to four separate arguments, not one string.
+# shellcheck disable=SC2086
 "$SU" \
     -g "$TGID" \
-    -G "$IGID" \
-    -G "$SGID" \
+    $SUPP_GROUPS \
     "$TUID" \
     /system/bin/sh \
     -c "
@@ -67,7 +82,7 @@ SGID="$(stat -c '%g' /storage)"              || die "cannot determine storage gr
         export TERMUX__ROOTFS_DIR='$TERMUX_DATA/files'
         export TERMUX__HOME='$TERMUX_HOME'
         export TERMUX__PREFIX='$TERMUX_PREFIX'
-        export TERMUX__UID=\"\$(id -u)\"
+        export TERMUX__UID='$TUID'
 
         export TERMUX_APP__PACKAGE_NAME='com.termux'
         export TERMUX_APP__DATA_DIR='$TERMUX_DATA'
@@ -90,7 +105,11 @@ SGID="$(stat -c '%g' /storage)"              || die "cannot determine storage gr
         export LD_PRELOAD='$TERMUX_EXEC'
 
         cd '$TERMUX_HOME' || exit 1
-        exec '$TERMUX_SHELL' -l -i
+        if [ -n \"\$TXSU_CMD\" ]; then
+            exec '$TERMUX_SHELL' -c \"\$TXSU_CMD\"
+        else
+            exec '$TERMUX_SHELL' -l -i
+        fi
     "
 
 RC=$?
