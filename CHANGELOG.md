@@ -1,3 +1,13 @@
+## v1.3
+
+- chore: trigger release (19cc4f1)
+- fix: awk must print VERSION_BADGE_END marker, not consume it (5db2f21)
+- fix: restore VERSION_BADGE_END marker (8e82f46)
+- fix: set txsu executable (644->755), add aliases termsu termux txsh tsu trmx via customize.sh (ee9392d)
+- chore: trigger release build (bd41b4d)
+- docs: bump README to v1.3, add VERSION_BADGE_END marker (8f1fa4f)
+- fix: add missing update-binary (Magisk module_installer.sh) required for valid flashable zip (a1c1a38)
+
 ## v1.2
 
 - fix: module id -> TermuxSu to match repo name, fix artifact naming, fix root context wording (0d0dcd8)
