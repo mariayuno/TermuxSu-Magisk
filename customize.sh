@@ -14,3 +14,4 @@ for name in $ALIASES; do
 done
 
 ui_print "- txsu installed, aliases: $ALIASES"
+# aliases: termsu termux txsh tsu trmx
