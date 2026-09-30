@@ -1,3 +1,8 @@
+## v1.9
+
+- chore: add check.sh consistency checker (51 checks, progress bar) (0c5342b)
+- docs: document fscreate SELinux fix (vars table, walkthrough, security notes) (eb5aa82)
+
 ## v1.8
 
 - fix: set fscreate before exec so all file creates get correct SELinux app_data_file context (f27b2d8)
