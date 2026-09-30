@@ -341,6 +341,7 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 | `TGID` | `stat '%g' TERMUX_DATA` | Termux app GID |
 | `IGID` | `stat '%g' /dev/socket/dnsproxyd` | Android `inet` group — gates network socket access |
 | `SGID` | `stat '%g' /storage` | Android storage group — gates sdcard/FUSE access *(soft failure: warns and continues without it)* |
+| `FSCREATE_CTX` | `stat -c '%C' $TERMUX_HOME` | SELinux file-create context; written to `/proc/self/attr/fscreate` so every file created in the shell gets the correct app label |
 | `TERMUX_SHELL_LINK` | `$TERMUX_HOME/.termux/shell` | Path of the user's shell preference (set by `chsh`) |
 | `TXSU_CMD` | from `-c`, else empty | Command for non-interactive mode; passed to the inner shell via the environment |
 | `SUPP_GROUPS` | `-G IGID [-G SGID]` | Supplementary-group arguments for `su` (intentionally left unquoted) |
@@ -413,7 +414,7 @@ fi
 <details>
 <summary>💡 Why read ~/.termux/shell first, and why bash before zsh?</summary>
 
-`~/.termux/shell` is how Termux itself stores the user's shell preference when they run `chsh`. It is a symlink pointing to the chosen shell binary. Reading it first means `txsu` respects whatever the user has already configured — the same shell their normal Termux sessions use.
+`~/.termux/shell` is how Termux itself stores the user's shell preference when they run `chsh`. It is a symlink pointing to the chosen shell binary. Reading it first means `txsu` respects whatever the user has already configured — the same shell their normal Termux sessions use. Any tool that creates files inside a `txsu` shell — including `chsh` — produces files with the correct SELinux label automatically.
 
 **Bash is Termux's actual default**, not zsh. Termux ships with bash pre-installed; zsh is an optional package. The fallback order reflects reality: most Termux users have bash, fewer have zsh.
 
@@ -583,6 +584,8 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 
 **Working directory:** once the environment is set, the inner shell runs `cd "$TERMUX_HOME" || exit 1`. If that fails, no shell is started: the inner shell exits with status 1, and `txsu` prints `txsu: shell exited with status 1` and exits with 1. The preflight `-d TERMUX_HOME` check runs as root, while this `cd` runs as the Termux UID.
 
+**SELinux file-create context:** before `exec`ing the shell, the inner `/system/bin/sh` writes the app's SELinux context to `/proc/self/attr/fscreate`. This is a per-process kernel attribute — it tells the kernel what label to assign to every file this process (and its children) create. The value is read from `$TERMUX_HOME` with `stat -c '%C'`, so it carries the correct `app_data_file` type and the app's MCS category pair. Every file any tool creates inside a `txsu` shell — editors, package managers, `chsh`, `git` — gets a label identical to what native Termux would produce.
+
 <details>
 <summary>💡 Why is PATH only the base set — no user additions?</summary>
 
@@ -619,7 +622,7 @@ In `-c` mode neither flag is passed: the script runs `SHELL -c "$TXSU_CMD"`.
 - **Only two outside inputs** — the shell path (target of `~/.termux/shell`, interpolated in single quotes and run as the Termux UID) and, with `-c`, the command string; everything else is hardcoded paths and integer `stat` output
 - **No Termux data parsed or sourced** — not `passwd`, not cache files, not `/proc/<pid>/environ`; only existence/symlink checks (`~/.termux/shell`, `~/.config/zsh`, `libtermux-exec.so`) run as root before `su`
 - **Environment overridden, not cleared** — the listed variables are set explicitly and `LD_LIBRARY_PATH` is unset; anything else `su` passes through is left as is
-- **No SELinux domain switching** — no `runcon`, no domain impersonation
+- **No SELinux domain switching** — no `runcon`, no domain impersonation; `fscreate` is set so new files get the correct `app_data_file` label with the app's MCS categories, making them indistinguishable from files created by native Termux
 - **Injection-immune GID detection** — `stat` returns integers; integers cannot contain shell syntax
 - **No cache files** — nothing written to disk, nothing sourced back
 
