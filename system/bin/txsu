@@ -60,6 +60,12 @@ if [ "$1" = "-c" ]; then
     export TXSU_CMD
 fi
 
+# Set fscreate so files created by the shell and its children get the correct
+# SELinux label (app_data_file with the app's MCS categories).
+# /proc/self/attr/fscreate is per-process and inherited across exec — setting it
+# here means the inner sh and the final shell both create files with the right context.
+FSCREATE_CTX="$(stat -c '%C' "$TERMUX_HOME" 2>/dev/null)"
+
 SUPP_GROUPS="-G $IGID"
 [ -n "$SGID" ] && SUPP_GROUPS="$SUPP_GROUPS -G $SGID"
 
@@ -104,20 +110,11 @@ SUPP_GROUPS="-G $IGID"
         unset LD_LIBRARY_PATH
         export LD_PRELOAD='$TERMUX_EXEC'
 
+        # Set fscreate so all file creates in this shell get the app's SELinux label.
+        [ -n '$FSCREATE_CTX' ] && printf '%s' '$FSCREATE_CTX' > /proc/self/attr/fscreate 2>/dev/null
+
         cd '$TERMUX_HOME' || exit 1
 
-        # chsh wrapper: fix SELinux MCS context on ~/.termux/shell after chsh runs.
-        # Files created under su inherit root's label and lose the app's MCS categories,
-        # making them unreadable by the Termux user. We copy the context from HOME itself
-        # (guaranteed correct) onto the symlink chsh just wrote.
-        chsh() {
-            command chsh "$@" || return $?
-            _sl="${HOME}/.termux/shell"
-            [ -L "$_sl" ] || return 0
-            _ctx="$(stat -c '%C' "$HOME" 2>/dev/null)"
-            [ -n "$_ctx" ] && chcon "$_ctx" "$_sl" 2>/dev/null
-            unset _sl _ctx
-        }
         if [ -n \"\$TXSU_CMD\" ]; then
             exec '$TERMUX_SHELL' -c \"\$TXSU_CMD\"
         else

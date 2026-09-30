@@ -181,7 +181,7 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 
 ---
 
-> **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash. Run `chsh` from inside a `txsu` session, not from Termux directly — `txsu` wraps `chsh` to fix the SELinux context on the symlink it creates.
+> **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash.
 
 ---
 
