@@ -1,3 +1,7 @@
+## v1.8
+
+- fix: set fscreate before exec so all file creates get correct SELinux app_data_file context (f27b2d8)
+
 ## v1.7
 
 - fix: wrap chsh to restore SELinux MCS context on ~/.termux/shell (89dad06)

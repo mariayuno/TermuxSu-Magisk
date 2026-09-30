@@ -1,6 +1,6 @@
 {
-  "version": "v1.7",
-  "versionCode": 8,
-  "zipUrl": "https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v1.7/TermuxSu-v1.7.zip",
+  "version": "v1.8",
+  "versionCode": 9,
+  "zipUrl": "https://github.com/mariayuno/TermuxSu-Magisk/releases/download/v1.8/TermuxSu-v1.8.zip",
   "changelog": "https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/CHANGELOG.md"
 }
