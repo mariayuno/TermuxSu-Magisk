@@ -1,3 +1,8 @@
+## v1.7
+
+- fix: wrap chsh to restore SELinux MCS context on ~/.termux/shell (89dad06)
+- docs: fix unsourced/stale claims (termux-exec, Play Store, networking, storage, LANG, GID rationale) (39f7b7b)
+
 ## v1.6
 
 - docs: align README with script (soft SGID, -c mode, PATH, env claims); fix LANG default expansion (6227c11)
