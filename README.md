@@ -55,7 +55,7 @@ You get a **broken impostor** that looks like one.
 |---|---|
 | 🌐 Networking | Missing `inet` supplementary group — can't open `dnsproxyd` socket |
 | 💾 `/sdcard` access | Missing `storage` supplementary group — FUSE denies access |
-| 🔧 `sudo` / `tsu` | Not found — PATH is wrong or rc file never loads |
+| 🔧 `sudo` / `tsu` | Not found — `$PREFIX/bin` is absent from PATH because no rc file is sourced |
 | 📦 PATH duplicated | Naive env-copy makes rc file append paths multiple times |
 | 🐚 Wrong shell | Ignoring the user's configured shell preference |
 
@@ -148,7 +148,7 @@ export PATH="/data/adb:$PATH"
 txsu
 ```
 
-> `/data/adb/` persists across reboots and is not wiped by OTA updates.
+> `/data/adb/` persists across reboots and persists across reboots.
 
 ---
 
@@ -177,7 +177,7 @@ txsu -c "python3 /data/local/myscript.py"
 
 The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically before the command runs.
 
-Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any other arguments, including anything after `CMD`, are ignored, and without `-c` an interactive shell opens. If the shell exits non-zero, `txsu` prints `txsu: shell exited with status N` on stdout and exits with that status.
+Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any other arguments, including anything after `CMD`, are ignored, and without `-c` an interactive shell opens. If the shell exits non-zero, `txsu` prints `txsu: shell exited with status N` on stdout and exits with that status. The same happens (status 1) if the inner shell cannot `cd` into the Termux home.
 
 ---
 
@@ -190,11 +190,11 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 | Requirement | Details |
 |---|---|
 | Root | Magisk, KernelSU, ResuKiSU, or APatch |
-| Termux | Any recent version — install from **F-Droid or GitHub**, not the Play Store (deprecated) |
+| Termux | Any recent version — install from **F-Droid or GitHub**, not the Google Play Store (experimental, may have missing functionality) |
 | Shell | Bash is Termux's default and works out of the box. `txsu` honours your configured shell. |
-| Android | 7.0+ (F-Droid build); the Play Store build requires Android 11+ but is deprecated |
+| Android | 7.0+ (F-Droid build); the experimental Google Play build requires Android 11+ |
 
-> ⚠️ **Do not install Termux from the Google Play Store.** It stopped receiving updates in 2020. Install from [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases).
+> ⚠️ **Prefer F-Droid or GitHub.** The Google Play build is experimental. Install from [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases).
 
 ---
 
@@ -296,7 +296,7 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
                     │  unset  LD_LIBRARY_PATH                    │
                     │  export LD_PRELOAD  libtermux-exec.so      │
                     │                                             │
-                    │  cd HOME                                    │
+                    │  cd HOME      (exit 1 if it fails)          │
                     └──────────────┬──────────────────────────────┘
                                    │
                                    ▼
@@ -334,7 +334,7 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 | `TERMUX_DATA` | `/data/data/com.termux` | Termux app data root |
 | `TERMUX_PREFIX` | `…/files/usr` | Termux package prefix (`$PREFIX`) |
 | `TERMUX_HOME` | `…/files/home` | Termux home directory (`$HOME`) |
-| `TERMUX_EXEC` | `…/lib/libtermux-exec.so` | Termux's exec preload library (stable public name, symlink to active variant) |
+| `TERMUX_EXEC` | `…/lib/libtermux-exec.so` | Termux's exec preload library (compat symlink to the active variant) |
 | `TERMUX_SHELL` | detected at runtime | User's configured shell, or bash, or zsh |
 | `ZDOTDIR_EXPORT` | set conditionally | Only for zsh + XDG config layout |
 | `TUID` | `stat '%u' TERMUX_DATA` | Termux app UID |
@@ -371,7 +371,7 @@ die() { echo "txsu: ERROR: $*" >&2; exit 1; }
 
 Without `libtermux-exec.so` set as `LD_PRELOAD`, Termux binaries fail to execute from outside the Termux app context. The library intercepts `exec()` calls and rewrites `/bin/` and `/usr/bin/` paths to Termux's equivalents under `$PREFIX/bin/`, and handles execution restrictions introduced in Android 10+. Without it, virtually every command in the shell will fail with "not found" or "exec format error".
 
-`libtermux-exec.so` is the stable public name — it's a symlink that points to whichever internal variant (`libtermux-exec-ld-preload.so`, `libtermux-exec-direct-ld-preload.so`, etc.) is correct for the current device. The script uses this symlink, not the internal variant files.
+`libtermux-exec.so` is the backward-compatibility symlink to the active variant (`libtermux-exec-ld-preload.so`, `libtermux-exec-direct-ld-preload.so`, etc.) is correct for the current device. The script uses this symlink, not the internal variant files.
 
 </details>
 
@@ -468,7 +468,7 @@ SGID="$(stat -c '%g' /storage 2>/dev/null)" \
 
 `stat -c '%u'` and `stat -c '%g'` return decimal integers. Integers cannot contain shell metacharacters — this eliminates the entire class of injection vulnerabilities that come from reading `/proc/<pid>/environ`, parsing `passwd` files, or using `pm dump`.
 
-GIDs are not fixed across Android versions, OEM builds, or custom ROMs. Reading the GID from the resource it guards — the `dnsproxyd` socket for the `inet` group, the `/storage` mount for the storage group — means detection is always correct and self-documenting. Any other method would be guessing.
+GIDs for `inet` and storage are read from the resource each guards (`/dev/socket/dnsproxyd` for `inet`, `/storage` mount for the storage group — means detection is always correct and self-documenting. Any other method would be guessing.
 
 </details>
 
@@ -502,14 +502,14 @@ Android's `dnsproxyd` socket is `gid=<inet> mode=660`. Without the `inet` supple
 
 Without `dnsproxyd` access, `getaddrinfo()` fails. DNS resolution is broken. Every network call — `curl`, `wget`, `git`, `pip` — fails.
 
-Proven empirically: `su 10172 python3 -c 'socket.connect("/dev/socket/dnsproxyd")'` gives `PermissionError(13)`. With `-G <inet_gid>` added: it succeeds, DNS resolves. One supplementary group. No SELinux change. No `resolv.conf`. No `runcon`.
+`netd` creates `/dev/socket/dnsproxyd` as `0660 root:inet` (from AOSP `netd.rc`). Processes without the `inet` supplementary group get `EACCES` on that socket, breaking DNS and any network call routed through `netd`.
 
 </details>
 
 <details>
 <summary>💡 Why does the missing storage group break /sdcard?</summary>
 
-`/sdcard` and `/storage/emulated/0` are served by a FUSE daemon. The daemon checks supplementary group membership before granting access. When Android's Zygote forks a real Termux process, it explicitly assigns these storage groups. A bare `su <uid>` replicates none of them. The process has the right UID but still can't access external storage.
+``/sdcard` and `/storage/emulated/0` are FUSE mounts. The kernel checks supplementary group membership at open time. `txsu` adds the storage GID so those opens succeed. [Termux process, it explicitly assigns these storage groups. A bare `su <uid>` replicates none of them. The process has the right UID but still can't access external storage.
 
 Detecting the GID via `stat -c '%g' /storage` reads it from the mount point being guarded — works across all Android versions and custom ROMs without hardcoding.
 
@@ -519,6 +519,15 @@ Detecting the GID via `stat -c '%g' /storage` reads it from the mount point bein
 <summary>💡 Why /system/bin/sh -c as an intermediate step?</summary>
 
 `su ... TUID /system/bin/sh -c '...'` drops privileges first, then the inner `sh -c` string sets the environment explicitly. It does not clear it: the inner shell inherits whatever `su` passes on, the variables listed below are overridden, and `LD_LIBRARY_PATH` is unset (in `-c` mode, `TXSU_CMD` reaches the inner shell this way). The `exec` at the end replaces the intermediate `sh` with the final shell process, leaving no wrapper.
+
+</details>
+
+<details>
+<summary>💡 Why is the -c command passed through an environment variable?</summary>
+
+The inner shell is one string handed to `/system/bin/sh -c "…"`, which treats it as program text. Pasting the user's command into that string would make `/system/bin/sh` parse it once, inside the surrounding quotes, before the Termux shell ever sees it. Embedded quotes then end the string early and backslashes are consumed: `txsu -c 'echo "two words"'` would print `two`.
+
+So `txsu` exports the command as `TXSU_CMD` before calling `su`, and the inner string contains only the fixed text `exec SHELL -c "$TXSU_CMD"`. The command travels as data, and the Termux shell parses it exactly once, as typed.
 
 </details>
 
@@ -572,6 +581,8 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | `LD_LIBRARY_PATH` | *(unset — cleared in case root session had it set)* |
 | `LD_PRELOAD` | `$PREFIX/lib/libtermux-exec.so` |
 
+**Working directory:** once the environment is set, the inner shell runs `cd "$TERMUX_HOME" || exit 1`. If that fails, no shell is started: the inner shell exits with status 1, and `txsu` prints `txsu: shell exited with status 1` and exits with 1. The preflight `-d TERMUX_HOME` check runs as root, while this `cd` runs as the Termux UID.
+
 <details>
 <summary>💡 Why is PATH only the base set — no user additions?</summary>
 
@@ -584,7 +595,7 @@ By providing only a fixed base PATH (`PREFIX/bin` first, then applets and system
 <details>
 <summary>💡 Why unset LD_LIBRARY_PATH?</summary>
 
-On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. However, some root environments — certain KSU builds, or third-party root apps — may set it to point at system library paths. If that leaks into Termux's shell, the dynamic linker can pick up wrong `.so` files. Clearing it as a precaution ensures `libtermux-exec.so` operates in a clean linker environment regardless of where `txsu` was called from.
+On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. Some root environments may set it to point at system library paths. If that leaks into Termux's shell, the dynamic linker can pick up wrong `.so` files. Clearing it as a precaution ensures `libtermux-exec.so` operates in a clean linker environment regardless of where `txsu` was called from.
 
 </details>
 
@@ -598,13 +609,6 @@ On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. However, some r
 Together they produce the same experience as opening a native Termux terminal. Either flag alone is insufficient — without `-l`, login-level config is skipped; without `-i`, the shell may be treated as non-interactive and skip the rc file.
 
 In `-c` mode neither flag is passed: the script runs `SHELL -c "$TXSU_CMD"`.
-
-</details>
-
-<details>
-<summary>💡 Why is TERMUX__USER_ID not set?</summary>
-
-`TERMUX__USER_ID` is supposed to reflect the Android multi-user profile ID (0 for the primary user, non-zero for work profiles and secondary users). Hardcoding it to 0 would silently break work profile setups. `txsu` neither sets nor reads it, so it is left unset rather than guessed.
 
 </details>
 
