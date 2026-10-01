@@ -55,23 +55,24 @@ You get a **broken impostor** that looks like one.
 |---|---|
 | 🌐 Networking | Missing `inet` supplementary group — can't open `dnsproxyd` socket |
 | 💾 `/sdcard` access | Missing `storage` supplementary group — FUSE denies access |
-| 🔧 `sudo` / `tsu` | Not found — `$PREFIX/bin` is absent from PATH because no rc file is sourced |
+| 🔧 `sudo` / `tsu` | `$PREFIX/bin` is absent from PATH because no rc file is sourced |
 | 📦 PATH duplicated | Naive env-copy makes rc file append paths multiple times |
 | 🐚 Wrong shell | Ignoring the user's configured shell preference |
+| 🏷 Wrong SELinux label | Files created get root's label, not the app's — unreadable by native Termux |
 
-`txsu` fixes all of this. Precisely, portably, and without SELinux hacks.
+`txsu` fixes all of this precisely and portably.
 
 ---
 
 ## ⚡ Try It Now — No Install Required
 
-Run this in a **root shell** (ADB, a root terminal, or any root context) to try `txsu` without touching your system:
+Run this in a **root shell** to try `txsu` without touching your system:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /tmp/txsu && sh /tmp/txsu
 ```
 
-Nothing is installed — the script is only saved to `/tmp/txsu` and run from there. If it works, pick a method below to make it permanent.
+The script is only saved to `/tmp/txsu` and run from there. If it works, pick a method below to make it permanent.
 
 ---
 
@@ -127,34 +128,21 @@ Download the zip from [Releases](https://github.com/mariayuno/TermuxSu-Magisk/re
 >
 > **KernelSU / APatch:** same flow inside their respective manager apps
 
-Magisk and KernelSU also support in-app auto-update via `update.json` — the module will show an update prompt when a new version is released.
+Magisk and KernelSU also support in-app auto-update via `update.json`.
 
 ### Method 3 — No-Flash Persistent Install *(no reboot needed)*
-
-Run this in a **root shell** to drop `txsu` into `/data/adb/` without flashing anything:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/system/bin/txsu -o /data/adb/txsu && chmod 755 /data/adb/txsu
 ```
 
-Then call it by full path, or add `/data/adb` to PATH:
+Then call it by full path, or add `/data/adb` to PATH.
 
-```sh
-# Run directly
-/data/adb/txsu
-
-# Or add to root shell profile
-export PATH="/data/adb:$PATH"
-txsu
-```
-
-> `/data/adb/` persists across reboots and persists across reboots.
+> `/data/adb/` persists across reboots.
 
 ---
 
 ### Aliases
-
-The module installs several aliases alongside `txsu` — all invoke the same script:
 
 | Command | Notes |
 |---|---|
@@ -164,24 +152,18 @@ The module installs several aliases alongside `txsu` — all invoke the same scr
 | `termux` | shorthand for "open Termux" |
 | `trmx` | compact variant |
 
-All land you in the same full Termux environment.
-
 ### Non-interactive use
-
-`txsu` also accepts `-c` to run a single command and exit:
 
 ```sh
 txsu -c "pkg upgrade -y"
 txsu -c "python3 /data/local/myscript.py"
 ```
 
-The full Termux environment (PATH, LD_PRELOAD, groups) is set up identically before the command runs.
-
-Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any other arguments, including anything after `CMD`, are ignored, and without `-c` an interactive shell opens. If the shell exits non-zero, `txsu` prints `txsu: shell exited with status N` on stdout and exits with that status. The same happens (status 1) if the inner shell cannot `cd` into the Termux home.
+Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra arguments after `CMD` are ignored.
 
 ---
 
-> **Termux prerequisite:** Bash ships with Termux by default — no extra setup needed. To use a different shell, install it in Termux and run `chsh -s zsh` (or `fish`, etc.) — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash.
+> **Termux prerequisite:** Bash ships with Termux by default. To use a different shell, install it in Termux and run `chsh -s zsh` — `txsu` reads `~/.termux/shell` to pick it up. If you've never run `chsh`, `txsu` falls back to bash then zsh.
 
 ---
 
@@ -191,7 +173,8 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 |---|---|
 | Root | Magisk, KernelSU, ResuKiSU, or APatch |
 | Termux | Any recent version — install from **F-Droid or GitHub**, not the Google Play Store (experimental, may have missing functionality) |
-| Shell | Bash is Termux's default and works out of the box. `txsu` honours your configured shell. |
+| clang | `pkg install clang` — required to build the SELinux fscreate preload library. **txsu will refuse to run without it.** |
+| Shell | Bash is Termux's default. `txsu` honours your configured shell. |
 | Android | 7.0+ (F-Droid build); the experimental Google Play build requires Android 11+ |
 
 > ⚠️ **Prefer F-Droid or GitHub.** The Google Play build is experimental. Install from [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases).
@@ -203,19 +186,20 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │      ROOT SESSION  (adb shell, root terminal, any su)           │
-│                    uid=0 · env=root's env                       │
+│                    uid=0  ·  u:r:ksu:s0                         │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
                     ┌────────────────┐
-                    │  run:  txsu    │
+                    │   run: txsu    │
                     └───────┬────────┘
                             │
              ───────────────▼───────────────
             │        PREFLIGHT CHECKS        │
             │  ✔ running as root?            │
-            │  ✔ /data/data/com.termux  ?    │
+            │  ✔ /data/data/com.termux ?     │
             │  ✔ Termux home exists?         │
+            │  ✔ Termux prefix exists?       │
             │  ✔ libtermux-exec.so exists?   │
              ───────────────┬───────────────
                             │ all pass
@@ -224,102 +208,127 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
             │           SHELL DETECTION             │
             │                                      │
             │   ~/.termux/shell exists?            │
-            │       ──yes──► use it  (user's chsh) │
+            │       ──yes──► use it  (user chsh)   │
             │           │                          │
             │          no                          │
             │           │                          │
-            │   bash installed?  ──yes──► use bash │
-            │       │            (Termux default)  │
-            │      no                              │
-            │       │                              │
             │   zsh installed?   ──yes──► use zsh  │
             │       │                              │
             │      no                              │
             │       │                              │
-            │   die("pkg install bash")            │
+            │   bash installed?  ──yes──► use bash │
+            │       │                              │
+            │      no ──► die()                    │
             │                                      │
-            │   then: resolved shell executable?   │
-            │         no ──► die()                 │
+            │   resolved shell executable? ──no──► die()
              ──────────────┬───────────────────────
                            │
                            ▼
-             ─────────────────────────────────────────────
-            │   ZDOTDIR  (zsh only, XDG layout only)      │
-            │                                             │
-            │   shell is zsh?                             │
-            │     AND ~/.config/zsh/ exists?              │
-            │         ──yes──► export ZDOTDIR             │
-            │         ──no───► skip (normal ~/.zshrc)     │
-             ─────────────────────┬───────────────────────
-                                  │
-                    ──────────────▼──────────────
-                   │   DYNAMIC GID DETECTION      │
-                   │                             │
-                   │  TUID = stat '%u' com.termux/│
-                   │  TGID = stat '%g' com.termux/│
-                   │  IGID = stat '%g'            │
-                   │         /dev/socket/dnsproxyd│  ← inet group
-                   │  SGID = stat '%g' /storage   │  ← storage group
-                    ──────────────┬──────────────
-                                  │
-                    ──────────────▼──────────────
-                   │       su INVOCATION          │
-                   │                             │
-                   │  /system/bin/su             │
-                   │    -g  TGID                 │  ← primary group
-                   │    -G  IGID                 │  ← +inet
-                   │    -G  SGID (if available)  │  ← +storage
-                   │    TUID                     │  ← UID switch
-                   │    /system/bin/sh -c '...'  │
-                    ──────────────┬──────────────
-                                  │
-                    ┌─────────────▼──────────────────────────────┐
-                    │    INNER SHELL  (uid=TUID, clean env)       │
-                    │                                             │
-                    │  export HOME        TERMUX_HOME            │
-                    │  export PREFIX      TERMUX_PREFIX          │
-                    │  export ZDOTDIR     (if applicable)        │
-                    │  export TERM        xterm-256color         │
-                    │  export LANG        ${LANG:-en_US.UTF-8}   │
-                    │                                             │
-                    │  export TERMUX__*   (rootfs, home, prefix, │
-                    │                      uid)                  │
-                    │  export TERMUX_APP__* (pkg name, data dir) │
-                    │                                             │
-                    │  export ANDROID_ROOT / DATA / STORAGE      │
-                    │  export ANDROID_ART_ROOT / I18N / TZDATA   │
-                    │                                             │
-                    │  export PATH  PREFIX/bin : applets : system│
-                    │  export TMPDIR                              │
-                    │  export EXTERNAL_STORAGE  /sdcard          │
-                    │                                             │
-                    │  unset  LD_LIBRARY_PATH                    │
-                    │  export LD_PRELOAD  libtermux-exec.so      │
-                    │                                             │
-                    │  cd HOME      (exit 1 if it fails)          │
-                    └──────────────┬──────────────────────────────┘
-                                   │
-                                   ▼
-                    ┌──────────────────────────────┐
-                    │ no -c:  exec SHELL -l -i     │
-                    │   sources login + rc config  │
-                    │ -c CMD: exec SHELL -c "CMD"  │
-                    │   (no -l / -i passed)        │
-                    └──────────────┬───────────────┘
-                                   │
-                    ───────────────▼───────────────
-                   │                               │
-                   │   ✅  FULL TERMUX SHELL        │
-                   │                               │
-                   │   uid = Termux UID            │
-                   │   groups = Termux + inet +    │
-                   │            storage            │
-                   │   internet works              │
-                   │   /sdcard works               │
-                   │   PATH correct, sudo/tsu findable   │
-                   │   rc loaded exactly once      │
-                   │   PATH clean, no duplicates   │
-                    ───────────────────────────────
+             ──────────────────────────────────────
+            │   ZDOTDIR  (zsh only, XDG only)      │
+            │                                      │
+            │   shell = */zsh?                     │
+            │     AND ~/.config/zsh/ exists?        │
+            │       ──yes──► ZDOTDIR_EXPORT set    │
+            │       ──no───► ZDOTDIR_EXPORT=""     │
+             ──────────────┬───────────────────────
+                           │
+                           ▼
+             ──────────────────────────────────────
+            │   DYNAMIC UID / GID DETECTION        │
+            │                                      │
+            │  TUID  = stat '%u' com.termux/       │
+            │  TGID  = stat '%g' com.termux/       │
+            │  IGID  = stat '%g' /dev/socket/dnsproxyd  ← inet
+            │  SGID  = stat '%g' /storage          │  ← storage (soft)
+            │                                      │
+            │  TERMUX_HOME_CTX = stat '%C' HOME    │  ← SELinux ctx
+             ──────────────┬───────────────────────
+                           │
+                           ▼
+             ──────────────────────────────────────
+            │   BUILD SELINUX PRELOAD LIBRARY      │
+            │                                      │
+            │  libtxsu-fscreate.so exists?         │
+            │    ──yes──► skip build               │
+            │    ──no───► find clang/cc            │
+            │               not found?             │
+            │                 ──► !! DANGER die !! │
+            │               found ──► compile .so  │
+            │                        chown TUID    │
+            │                        chcon CTX     │
+            │                        chmod 755     │
+             ──────────────┬───────────────────────
+                           │
+                           ▼
+                   ────────────────────
+                  │   su INVOCATION    │
+                  │                   │
+                  │  /system/bin/su   │
+                  │    -g  TGID       │  ← primary group
+                  │    -G  IGID       │  ← +inet
+                  │    -G  SGID       │  ← +storage (if available)
+                  │    TUID           │  ← UID switch
+                  │    /system/bin/sh │
+                  │    -c INNER       │  ← positional args
+                   ────────┬──────────
+                           │
+              ┌────────────▼───────────────────────────────┐
+              │    INNER SHELL  (uid=TUID)                  │
+              │                                             │
+              │  receive positional args:                   │
+              │    $1 TERMUX_HOME   $2 TERMUX_PREFIX        │
+              │    $3 TERMUX_FILES  $4 TERMUX_DATA          │
+              │    $5 TERMUX_SHELL  $6 TERMUX_EXEC          │
+              │    $7 TERMUX_FSCTX  $8 TXSU_LIB             │
+              │    $9 TXSU_CMD                              │
+              │                                             │
+              │  export HOME / PREFIX / SHELL / ZDOTDIR    │
+              │  export TERM / LANG                        │
+              │  export TERMUX__* / TERMUX_APP__*          │
+              │  export ANDROID_* / EXTERNAL_STORAGE       │
+              │  export PATH (7-entry fixed set)           │
+              │  export TMPDIR                             │
+              │  unset  LD_LIBRARY_PATH                    │
+              │  export TXSU_FSCREATE = TERMUX_FSCTX       │
+              │  export LD_PRELOAD = libtxsu-fscreate.so   │
+              │                    : libtermux-exec.so     │
+              │                                             │
+              │  cd TERMUX_HOME  || exit 1                 │
+              └────────────┬───────────────────────────────┘
+                           │
+                           ▼
+              ┌────────────────────────────────┐
+              │  exec SHELL -l -i              │  ← interactive
+              │  exec SHELL -c "$TXSU_CMD"     │  ← -c mode
+              └────────────┬───────────────────┘
+                           │
+           ┌───────────────▼────────────────────────────────┐
+           │  every dynamically linked child process        │
+           │                                                │
+           │  dynamic loader                                │
+           │    ├── libtxsu-fscreate.so  (constructor)     │
+           │    │       reads TXSU_FSCREATE env var         │
+           │    │       writes to /proc/self/attr/fscreate  │
+           │    │       ──► ALL new files get:              │
+           │    │           u:object_r:app_data_file:s0     │
+           │    │           :c<A>,c<B>,c<C>,c<D>  (dynamic)│
+           │    └── libtermux-exec.so  (Termux exec fix)   │
+           └────────────────────────────────────────────────┘
+                           │
+            ───────────────▼───────────────
+           │                               │
+           │   ✅  FULL TERMUX SHELL        │
+           │                               │
+           │   uid = Termux UID            │
+           │   groups: Termux + inet +     │
+           │           storage             │
+           │   internet ✔                  │
+           │   /sdcard  ✔                  │
+           │   PATH correct ✔              │
+           │   rc loaded once ✔            │
+           │   new files: correct label ✔  │
+            ───────────────────────────────
 ```
 
 ---
@@ -330,49 +339,52 @@ Only a leading `-c CMD` is parsed (`-c` without an argument is an error). Any ot
 
 | Variable | Value | Purpose |
 |---|---|---|
-| `SU` | `/system/bin/su` | Path to the system `su` binary |
+| `SU` | `/system/bin/su` | Path to the system `su` binary; expected present on all rooted devices |
 | `TERMUX_DATA` | `/data/data/com.termux` | Termux app data root |
+| `TERMUX_FILES` | `…/files` | Termux files dir |
 | `TERMUX_PREFIX` | `…/files/usr` | Termux package prefix (`$PREFIX`) |
 | `TERMUX_HOME` | `…/files/home` | Termux home directory (`$HOME`) |
-| `TERMUX_EXEC` | `…/lib/libtermux-exec.so` | Termux's exec preload library (compat symlink to the active variant) |
-| `TERMUX_SHELL` | detected at runtime | User's configured shell, or bash, or zsh |
-| `ZDOTDIR_EXPORT` | set conditionally | Only for zsh + XDG config layout |
+| `TERMUX_EXEC` | `…/lib/libtermux-exec.so` | Termux exec preload library (compat symlink to active variant) |
+| `TXSU_LIB` | `…/lib/libtxsu-fscreate.so` | SELinux fscreate preload library (built by txsu if absent) |
+| `TXSU_SRC` | `…/tmp/txsu-fscreate.c` | Temporary C source; removed after compilation |
+| `TERMUX_SHELL_LINK` | `$TERMUX_HOME/.termux/shell` | User's shell preference symlink (written by `chsh`) |
+| `TERMUX_SHELL` | detected at runtime | Resolved shell binary path |
+| `ZDOTDIR_EXPORT` | `~/.config/zsh` or empty | Set only for zsh + XDG layout |
 | `TUID` | `stat '%u' TERMUX_DATA` | Termux app UID |
 | `TGID` | `stat '%g' TERMUX_DATA` | Termux app GID |
-| `IGID` | `stat '%g' /dev/socket/dnsproxyd` | Android `inet` group — gates network socket access |
-| `SGID` | `stat '%g' /storage` | Android storage group — gates sdcard/FUSE access *(soft failure: warns and continues without it)* |
-| `FSCREATE_CTX` | `stat -c '%C' $TERMUX_HOME` | SELinux file-create context; written to `/proc/self/attr/fscreate` so every file created in the shell gets the correct app label |
-| `TERMUX_SHELL_LINK` | `$TERMUX_HOME/.termux/shell` | Path of the user's shell preference (set by `chsh`) |
-| `TXSU_CMD` | from `-c`, else empty | Command for non-interactive mode; passed to the inner shell via the environment |
-| `SUPP_GROUPS` | `-G IGID [-G SGID]` | Supplementary-group arguments for `su` (intentionally left unquoted) |
-| `RC` | exit status of `su` | Reported if non-zero, then returned by `txsu` |
+| `IGID` | `stat '%g' /dev/socket/dnsproxyd` | `inet` group — gates network socket access |
+| `SGID` | `stat '%g' /storage` | storage group — gates sdcard/FUSE access *(soft: skipped with warning if absent)* |
+| `TERMUX_HOME_CTX` | `stat '%C' TERMUX_HOME` | Full SELinux context of Termux HOME (e.g. `u:object_r:app_data_file:s0:c172,…`) |
+| `SUPP_GROUPS` | `-G IGID [-G SGID]` | Supplementary-group args for `su` (intentionally unquoted for word-splitting) |
+| `TXSU_CMD` | from `-c`, else empty | Command for non-interactive mode |
+| `RC` | exit status of `su` | Printed if non-zero; returned by `txsu` |
 
 ---
 
 ### Preflight Checks
 
 ```sh
-die() { echo "txsu: ERROR: $*" >&2; exit 1; }
-
-[ "$(id -u)" = 0 ]  || die "must run as root"
-[ -d "$TERMUX_DATA" ] || die "Termux data directory not found: is Termux installed?"
-[ -d "$TERMUX_HOME" ] || die "Termux home not found: open Termux at least once first"
-[ -f "$TERMUX_EXEC" ] || die "libtermux-exec.so not found: run 'pkg install termux-exec' in Termux"
+[ "$(id -u)" = 0 ]    || die "must run as root"
+[ -x "$SU" ]          || die "su not found: $SU"
+[ -d "$TERMUX_DATA" ] || die "Termux data directory not found"
+[ -d "$TERMUX_HOME" ] || die "Termux HOME not found"
+[ -d "$TERMUX_PREFIX" ] || die "Termux PREFIX not found"
+[ -f "$TERMUX_EXEC" ] || die "libtermux-exec.so not found"
 ```
 
 | Check | Guards against |
 |---|---|
 | `id -u = 0` | Running without root |
+| `-x $SU` | Missing su binary |
 | `-d TERMUX_DATA` | Termux not installed |
-| `-d TERMUX_HOME` | Termux installed but never opened — home directory not created yet |
-| `-f TERMUX_EXEC` | `termux-exec` package not installed (essential but not always present) |
+| `-d TERMUX_HOME` | Termux installed but never opened |
+| `-d TERMUX_PREFIX` | Corrupt Termux install |
+| `-f TERMUX_EXEC` | `termux-exec` not installed |
 
 <details>
-<summary>💡 Why check for libtermux-exec.so specifically?</summary>
+<summary>💡 Why check for libtermux-exec.so?</summary>
 
-Without `libtermux-exec.so` set as `LD_PRELOAD`, Termux binaries fail to execute from outside the Termux app context. The library intercepts `exec()` calls and rewrites `/bin/` and `/usr/bin/` paths to Termux's equivalents under `$PREFIX/bin/`, and handles execution restrictions introduced in Android 10+. Without it, virtually every command in the shell will fail with "not found" or "exec format error".
-
-`libtermux-exec.so` is the backward-compatibility symlink to the active variant (`libtermux-exec-ld-preload.so`, `libtermux-exec-direct-ld-preload.so`, etc.) is correct for the current device. The script uses this symlink, not the internal variant files.
+Without `libtermux-exec.so` as `LD_PRELOAD`, Termux binaries fail to execute outside the Termux app context on Android 10+. The library intercepts `execve()` and rewrites paths so Android's linker finds them under `$PREFIX/bin/`. `libtermux-exec.so` is a backward-compatibility symlink to the active variant (`libtermux-exec-ld-preload.so` or `libtermux-exec-direct-ld-preload.so` depending on Android version).
 
 </details>
 
@@ -381,18 +393,16 @@ Without `libtermux-exec.so` set as `LD_PRELOAD`, Termux binaries fail to execute
 ### Shell Detection
 
 ```sh
-TERMUX_SHELL_LINK="$TERMUX_HOME/.termux/shell"
 if [ -x "$TERMUX_SHELL_LINK" ]; then
-    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null || echo "$TERMUX_SHELL_LINK")"
-elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
-    TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
+    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null || true)"
 elif [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
     TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
+elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
+    TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
 else
-    die "no usable shell found — install one: pkg install bash"
+    die "no usable Termux shell found"
 fi
-
-[ -x "$TERMUX_SHELL" ] || die "resolved shell '$TERMUX_SHELL' is not executable"
+[ -x "$TERMUX_SHELL" ] || die "shell is not executable: $TERMUX_SHELL"
 ```
 
 ```
@@ -400,76 +410,137 @@ fi
          │
          no
          │
-  bash installed? ──yes──► use bash  (Termux's actual default)
-         │
-         no
-         │
   zsh installed?  ──yes──► use zsh
          │
          no
          │
-  die()  ──────────────────► error + exit 1
+  bash installed? ──yes──► use bash
+         │
+         no ──► die()
+         │
+  resolved path executable? ──no──► die()
 ```
 
 <details>
-<summary>💡 Why read ~/.termux/shell first, and why bash before zsh?</summary>
+<summary>💡 Why ~/.termux/shell first?</summary>
 
-`~/.termux/shell` is how Termux itself stores the user's shell preference when they run `chsh`. It is a symlink pointing to the chosen shell binary. Reading it first means `txsu` respects whatever the user has already configured — the same shell their normal Termux sessions use. Any tool that creates files inside a `txsu` shell — including `chsh` — produces files with the correct SELinux label automatically.
-
-**Bash is Termux's actual default**, not zsh. Termux ships with bash pre-installed; zsh is an optional package. The fallback order reflects reality: most Termux users have bash, fewer have zsh.
+`~/.termux/shell` is a symlink written by `chsh` pointing to the user's chosen shell. Reading it first means `txsu` uses exactly the same shell as native Termux sessions. The `readlink -f` resolves the symlink to an absolute path so `exec` receives a real binary, not a dangling link.
 
 </details>
 
 <details>
-<summary>💡 When is ZDOTDIR set, and when is it not?</summary>
+<summary>💡 ZDOTDIR — when is it set?</summary>
 
-`ZDOTDIR` only matters for zsh, and only for users who store their zsh config in `~/.config/zsh/` (the XDG Base Directory layout). The check is:
-
-```sh
-case "$TERMUX_SHELL" in
-    */zsh)
-        if [ -d "$TERMUX_HOME/.config/zsh" ]; then
-            ZDOTDIR_EXPORT="export ZDOTDIR='$TERMUX_HOME/.config/zsh'"
-        fi
-        ;;
-esac
-```
-
-If the user is running bash: `ZDOTDIR` is irrelevant, nothing is exported.
-
-If the user is running zsh with `~/.zshrc` in their home directory (the standard location): `~/.config/zsh/` won't exist, so `ZDOTDIR` is not set — zsh finds `.zshrc` in `HOME` exactly as it always does.
-
-If the user is running zsh with XDG layout (`~/.config/zsh/.zshrc`): `~/.config/zsh/` exists, `ZDOTDIR` is set, zsh finds `.zshrc` correctly.
-
-Setting `ZDOTDIR` unconditionally for all zsh users would actively break anyone with a normal `~/.zshrc` setup — zsh would look in `~/.config/zsh/` and find nothing.
+Only for zsh, and only when `~/.config/zsh/` exists (XDG layout). Setting it unconditionally would break users with `~/.zshrc` in their home directory — zsh would look in `~/.config/zsh/` and find nothing. Users on standard layout get nothing set; zsh finds `.zshrc` in `$HOME` as normal.
 
 </details>
 
 ---
 
-### Dynamic GID Detection
+### Dynamic UID / GID Detection
 
 ```sh
-TUID="$(stat -c '%u' "$TERMUX_DATA")" || die "cannot determine Termux UID"
-TGID="$(stat -c '%g' "$TERMUX_DATA")" || die "cannot determine Termux GID"
-IGID="$(stat -c '%g' /dev/socket/dnsproxyd)" || die "cannot determine inet group"
-SGID="$(stat -c '%g' /storage 2>/dev/null)" \
-    || { echo "txsu: warning: cannot determine storage group, continuing without it" >&2; SGID=""; }
+TUID="$(stat -c '%u' "$TERMUX_DATA")"     || die "cannot determine Termux UID"
+TGID="$(stat -c '%g' "$TERMUX_DATA")"     || die "cannot determine Termux GID"
+IGID="$(stat -c '%g' /dev/socket/dnsproxyd 2>/dev/null || true)"
+SGID="$(stat -c '%g' /storage 2>/dev/null || true)"
+TERMUX_HOME_CTX="$(stat -c '%C' "$TERMUX_HOME")" || die "cannot determine SELinux context"
 ```
 
 ```
-  /data/data/com.termux  ──stat──►  TUID  (e.g. 10172)
-  /data/data/com.termux  ──stat──►  TGID  (e.g. 10172)
-  /dev/socket/dnsproxyd  ──stat──►  IGID  ← GID of the socket itself = inet group
-  /storage               ──stat──►  SGID  ← GID of the mount point = storage group
+  /data/data/com.termux       ──stat '%u'──►  TUID
+  /data/data/com.termux       ──stat '%g'──►  TGID
+  /dev/socket/dnsproxyd       ──stat '%g'──►  IGID  (inet group)
+  /storage                    ──stat '%g'──►  SGID  (storage group, soft)
+  /data/data/com.termux/files/home  ──stat '%C'──►  TERMUX_HOME_CTX
 ```
 
 <details>
 <summary>💡 Why stat instead of hardcoding?</summary>
 
-`stat -c '%u'` and `stat -c '%g'` return decimal integers. Integers cannot contain shell metacharacters — this eliminates the entire class of injection vulnerabilities that come from reading `/proc/<pid>/environ`, parsing `passwd` files, or using `pm dump`.
+`stat -c '%u'` and `stat -c '%g'` return decimal integers — they cannot contain shell metacharacters. This eliminates injection vulnerabilities entirely. GIDs are read from the resource each guards: `dnsproxyd` for inet, `/storage` for the storage group. Always correct, always self-documenting.
 
-GIDs for `inet` and storage are read from the resource each guards (`/dev/socket/dnsproxyd` for `inet`, `/storage` mount for the storage group — means detection is always correct and self-documenting. Any other method would be guessing.
+</details>
+
+<details>
+<summary>💡 Why is inet a hard failure but storage is not?</summary>
+
+Without `inet`, DNS is broken and every network call fails. That's an unusable shell.
+
+Without `storage`, `/sdcard` is inaccessible but the shell itself and everything under `$PREFIX` still works fine. Worth a warning, not a hard abort.
+
+</details>
+
+---
+
+### Build SELinux Preload Library
+
+```sh
+build_preload() {
+    [ -f "$TXSU_LIB" ] && return 0        # already built — skip
+
+    # find clang or cc in Termux prefix
+    # NOT FOUND → scary die()
+
+    # compile libtxsu-fscreate.so
+    # constructor reads TXSU_FSCREATE env var on every execve()
+    # and writes it to /proc/self/attr/fscreate
+
+    chown "$TUID:$TGID" "$TXSU_LIB" || die  # must not be root-owned
+    chcon "$TERMUX_HOME_CTX" "$TXSU_LIB"    # correct SELinux label
+    chmod 755 "$TXSU_LIB"
+}
+```
+
+<details>
+<summary>💡 Why a preload library instead of writing fscreate directly?</summary>
+
+`/proc/self/attr/fscreate` is per-process and **resets to empty across `execve()`**. Writing it in the outer shell before calling `su` does nothing — it's reset the moment `su` exec's. Writing it in the inner `/system/bin/sh` does nothing — it resets again when the final shell is exec'd. And once privileges are dropped to `TUID`, the process no longer has `CAP_MAC_ADMIN` to write it at all.
+
+The preload library solves this: its constructor runs inside the dynamic loader of every `execve()` call that inherits `LD_PRELOAD`, **before** `main()`. It reads `TXSU_FSCREATE` from the environment (which survives `execve()`) and writes to `/proc/self/attr/fscreate` in the new process, before any file is created.
+
+```
+execve("touch")
+   │
+   ▼
+dynamic loader
+   ├── libtxsu-fscreate.so  constructor()
+   │       reads TXSU_FSCREATE
+   │       writes /proc/self/attr/fscreate   ◄── set BEFORE main()
+   └── touch
+           creates file  ──► correct label ✔
+```
+
+</details>
+
+<details>
+<summary>💡 Why must the library not be root-owned?</summary>
+
+If `libtxsu-fscreate.so` were owned by root and had the wrong SELinux label, loading it would itself fail under the app's SELinux policy, or worse — the wrong ownership would cause every file written through it to inherit wrong metadata. The `chown` to `TUID:TGID` and `chcon` to `TERMUX_HOME_CTX` are not optional hygiene, they are correctness requirements. If `chown` fails, `txsu` aborts.
+
+</details>
+
+<details>
+<summary>⚠️ What happens if clang is not installed?</summary>
+
+```
+╔══════════════════════════════════════════════════════╗
+║               !! DANGER — DO NOT IGNORE !!           ║
+╠══════════════════════════════════════════════════════╣
+║  clang is not installed in Termux.                   ║
+║                                                      ║
+║  Without it, txsu cannot build the SELinux context   ║
+║  bridge. Running without it means EVERY FILE you     ║
+║  create in this shell will have the WRONG SELinux    ║
+║  label and will be UNREADABLE by native Termux.      ║
+║                                                      ║
+║  Fix: open Termux and run:                           ║
+║       pkg install clang                              ║
+║  Then retry txsu.                                    ║
+╚══════════════════════════════════════════════════════╝
+```
+
+`txsu` refuses to launch. There is no degraded mode — a shell without the SELinux fix silently corrupts your Termux file labels.
 
 </details>
 
@@ -483,83 +554,52 @@ GIDs for `inet` and storage are read from the resource each guards (`/dev/socket
     $SUPP_GROUPS \
     "$TUID" \
     /system/bin/sh \
-    -c "..."
+    -c "$INNER" \
+    txsu \
+    "$TERMUX_HOME" "$TERMUX_PREFIX" "$TERMUX_FILES" "$TERMUX_DATA" \
+    "$TERMUX_SHELL" "$TERMUX_EXEC" "$TERMUX_HOME_CTX" "$TXSU_LIB" \
+    "$TXSU_CMD"
 ```
 
-| Flag | Value | Effect |
+| Argument | Value | Effect |
 |---|---|---|
-| `-g TGID` | Termux GID | Sets primary group to Termux's GID |
-| `-G IGID` | inet GID | Adds `inet` supplementary group → network socket access |
-| `-G SGID` | storage GID | Adds `storage` supplementary group → sdcard/FUSE access *(omitted with a warning if `/storage` is unavailable)* |
-| `TUID` | Termux UID | Switches UID from 0 to Termux's UID |
-| `/system/bin/sh -c '...'` | | Intermediate shell; sets the env explicitly before exec |
+| `-g TGID` | Termux GID | Primary group |
+| `-G IGID` | inet GID | Supplementary: network socket access |
+| `-G SGID` | storage GID | Supplementary: sdcard/FUSE access *(omitted if unavailable)* |
+| `TUID` | Termux UID | UID switch from 0 |
+| `/system/bin/sh -c INNER` | inner script | Intermediate shell that sets env before exec |
+| `txsu … $9` | positional args | All dynamic values passed as data, not embedded in the script string |
 
-`$SUPP_GROUPS` is built dynamically and intentionally left unquoted so shell word splitting passes each `-G <gid>` pair as separate arguments. `inet` is always required and is a hard failure; `storage` is best-effort — if `/storage` is absent on the device, a warning is printed and the shell still opens without it.
-
-<details>
-<summary>💡 Why does the missing inet group break networking?</summary>
-
-Android's `dnsproxyd` socket is `gid=<inet> mode=660`. Without the `inet` supplementary group, a process cannot open it — a plain Unix DAC (discretionary access control) failure, nothing to do with SELinux.
-
-Without `dnsproxyd` access, `getaddrinfo()` fails. DNS resolution is broken. Every network call — `curl`, `wget`, `git`, `pip` — fails.
-
-`netd` creates `/dev/socket/dnsproxyd` as `0660 root:inet` (from AOSP `netd.rc`). Processes without the `inet` supplementary group get `EACCES` on that socket, breaking DNS and any network call routed through `netd`.
-
-</details>
-
-<details>
-<summary>💡 Why does the missing storage group break /sdcard?</summary>
-
-``/sdcard` and `/storage/emulated/0` are FUSE mounts. The kernel checks supplementary group membership at open time. `txsu` adds the storage GID so those opens succeed. [Termux process, it explicitly assigns these storage groups. A bare `su <uid>` replicates none of them. The process has the right UID but still can't access external storage.
-
-Detecting the GID via `stat -c '%g' /storage` reads it from the mount point being guarded — works across all Android versions and custom ROMs without hardcoding.
-
-</details>
-
-<details>
-<summary>💡 Why /system/bin/sh -c as an intermediate step?</summary>
-
-`su ... TUID /system/bin/sh -c '...'` drops privileges first, then the inner `sh -c` string sets the environment explicitly. It does not clear it: the inner shell inherits whatever `su` passes on, the variables listed below are overridden, and `LD_LIBRARY_PATH` is unset (in `-c` mode, `TXSU_CMD` reaches the inner shell this way). The `exec` at the end replaces the intermediate `sh` with the final shell process, leaving no wrapper.
-
-</details>
-
-<details>
-<summary>💡 Why is the -c command passed through an environment variable?</summary>
-
-The inner shell is one string handed to `/system/bin/sh -c "…"`, which treats it as program text. Pasting the user's command into that string would make `/system/bin/sh` parse it once, inside the surrounding quotes, before the Termux shell ever sees it. Embedded quotes then end the string early and backslashes are consumed: `txsu -c 'echo "two words"'` would print `two`.
-
-So `txsu` exports the command as `TXSU_CMD` before calling `su`, and the inner string contains only the fixed text `exec SHELL -c "$TXSU_CMD"`. The command travels as data, and the Termux shell parses it exactly once, as typed.
-
-</details>
+All dynamic values are passed as positional arguments `$1`–`$9`. Nothing is interpolated into the `$INNER` script string itself — which means no quoting issues regardless of what those values contain.
 
 ---
 
 ### Environment Construction
 
-Inside the inner `sh -c`, the environment is built from hardcoded known-good values before `exec`ing the shell:
+Inside the inner `sh -c`, positional args are unpacked and the environment is built before `exec`:
 
 **🟢 Group A — Termux Identity**
 
 | Variable | Value |
 |---|---|
-| `HOME` | `/data/data/com.termux/files/home` |
-| `PREFIX` | `/data/data/com.termux/files/usr` |
-| `SHELL` | the resolved shell (target of `~/.termux/shell`, else the bash/zsh fallback) |
-| `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG layout only)* |
+| `HOME` | `$TERMUX_HOME` |
+| `PREFIX` | `$TERMUX_PREFIX` |
+| `SHELL` | resolved shell binary |
+| `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG only)* |
 | `TMPDIR` | `$PREFIX/tmp` |
 | `TERM` | `xterm-256color` |
-| `LANG` | inherited from the calling environment if set, else `en_US.UTF-8` |
+| `LANG` | inherited if set, else `en_US.UTF-8` |
 
-**🔵 Group B — Termux Internal Vars**
+**🔵 Group B — Termux Internal**
 
 | Variable | Value |
 |---|---|
-| `TERMUX__ROOTFS_DIR` | `/data/data/com.termux/files` |
-| `TERMUX__HOME` | `…/files/home` |
-| `TERMUX__PREFIX` | `…/files/usr` |
-| `TERMUX__UID` | Termux UID *(substituted directly from `stat` output — no subshell)* |
+| `TERMUX__ROOTFS_DIR` | `$TERMUX_FILES` |
+| `TERMUX__HOME` | `$TERMUX_HOME` |
+| `TERMUX__PREFIX` | `$TERMUX_PREFIX` |
+| `TERMUX__UID` | `$(id -u)` *(inside inner shell, already TUID)* |
 | `TERMUX_APP__PACKAGE_NAME` | `com.termux` |
-| `TERMUX_APP__DATA_DIR` | `/data/data/com.termux` |
+| `TERMUX_APP__DATA_DIR` | `$TERMUX_DATA` |
 
 **🟠 Group C — Android System Paths**
 
@@ -568,7 +608,7 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | `ANDROID_ROOT` | `/system` |
 | `ANDROID_DATA` | `/data` |
 | `ANDROID_STORAGE` | `/storage` |
-| `ANDROID_ASSETS` | `/system/app` *(fixed value; present for env completeness)* |
+| `ANDROID_ASSETS` | `/system/app` |
 | `ANDROID_ART_ROOT` | `/apex/com.android.art` |
 | `ANDROID_I18N_ROOT` | `/apex/com.android.i18n` |
 | `ANDROID_TZDATA_ROOT` | `/apex/com.android.tzdata` |
@@ -579,39 +619,30 @@ Inside the inner `sh -c`, the environment is built from hardcoded known-good val
 | Variable | Value |
 |---|---|
 | `PATH` | `$PREFIX/bin` → `$PREFIX/bin/applets` → `/system/bin` → `/system/xbin` → `/system/sbin` → `/sbin` → `/sbin/bin` |
-| `LD_LIBRARY_PATH` | *(unset — cleared in case root session had it set)* |
-| `LD_PRELOAD` | `$PREFIX/lib/libtermux-exec.so` |
+| `LD_LIBRARY_PATH` | *(unset)* |
+| `TXSU_FSCREATE` | `$TERMUX_HOME_CTX` — SELinux context passed to preload library |
+| `LD_PRELOAD` | `libtxsu-fscreate.so:libtermux-exec.so` |
 
-**Working directory:** once the environment is set, the inner shell runs `cd "$TERMUX_HOME" || exit 1`. If that fails, no shell is started: the inner shell exits with status 1, and `txsu` prints `txsu: shell exited with status 1` and exits with 1. The preflight `-d TERMUX_HOME` check runs as root, while this `cd` runs as the Termux UID.
-
-**SELinux file-create context:** before `exec`ing the shell, the inner `/system/bin/sh` writes the app's SELinux context to `/proc/self/attr/fscreate`. This is a per-process kernel attribute — it tells the kernel what label to assign to every file this process (and its children) create. The value is read from `$TERMUX_HOME` with `stat -c '%C'`, so it carries the correct `app_data_file` type and the app's MCS category pair. Every file any tool creates inside a `txsu` shell — editors, package managers, `chsh`, `git` — gets a label identical to what native Termux would produce.
+**Working directory:** `cd "$TERMUX_HOME" || exit 1` — if this fails, `txsu` prints `txsu: shell exited with status 1` and exits.
 
 <details>
-<summary>💡 Why is PATH only the base set — no user additions?</summary>
+<summary>💡 Why pass everything as positional args?</summary>
 
-If the env were copied from a live Termux process, it would contain a PATH that the shell's rc file had already expanded — with npm-global, mason, `.local/bin`, etc. When the new shell then sourced its rc file, those paths would be appended again, resulting in duplicates or worse, triplicates.
+The inner script is a single string passed to `/system/bin/sh -c "..."`. Any variable interpolated directly into that string would be parsed by the outer shell before `su` ever runs — embedded quotes, spaces and special characters would corrupt the script. Positional arguments cross the `su` boundary as data. The inner shell unpacks them cleanly with `VAR="$1"` regardless of their content.
 
-By providing only a fixed base PATH (`PREFIX/bin` first, then applets and system directories) with no user additions, the shell's rc file runs once on a clean foundation, adding each custom path exactly once. This is identical to what happens when you open a normal Termux terminal.
+</details>
+
+<details>
+<summary>💡 Why -l -i for the final shell?</summary>
+
+`-l` sources login config (`.bash_profile` / `.zprofile`). `-i` sources interactive config (`.bashrc` / `.zshrc`). Together they produce the same experience as opening a native Termux terminal. In `-c` mode neither flag is passed — `exec SHELL -c "$TXSU_CMD"` only.
 
 </details>
 
 <details>
 <summary>💡 Why unset LD_LIBRARY_PATH?</summary>
 
-On Android 7+, Termux does not set `LD_LIBRARY_PATH` by default. Some root environments may set it to point at system library paths. If that leaks into Termux's shell, the dynamic linker can pick up wrong `.so` files. Clearing it as a precaution ensures `libtermux-exec.so` operates in a clean linker environment regardless of where `txsu` was called from.
-
-</details>
-
-<details>
-<summary>💡 Why -l -i together?</summary>
-
-`-l` (login) causes the shell to source its login-level config: `.bash_profile` / `.zprofile`. This handles environment-level setup.
-
-`-i` (interactive) causes the shell to source its interactive config: `.bashrc` / `.zshrc`. This sets up aliases, plugins, prompt, and PATH additions.
-
-Together they produce the same experience as opening a native Termux terminal. Either flag alone is insufficient — without `-l`, login-level config is skipped; without `-i`, the shell may be treated as non-interactive and skip the rc file.
-
-In `-c` mode neither flag is passed: the script runs `SHELL -c "$TXSU_CMD"`.
+Some root environments set `LD_LIBRARY_PATH` to system library paths. If that leaks into the Termux shell, the dynamic linker can pick up wrong `.so` files. Clearing it ensures the linker uses its standard search path.
 
 </details>
 
@@ -619,12 +650,12 @@ In `-c` mode neither flag is passed: the script runs `SHELL -c "$TXSU_CMD"`.
 
 ## 🔒 Security Notes
 
-- **Only two outside inputs** — the shell path (target of `~/.termux/shell`, interpolated in single quotes and run as the Termux UID) and, with `-c`, the command string; everything else is hardcoded paths and integer `stat` output
-- **No Termux data parsed or sourced** — not `passwd`, not cache files, not `/proc/<pid>/environ`; only existence/symlink checks (`~/.termux/shell`, `~/.config/zsh`, `libtermux-exec.so`) run as root before `su`
-- **Environment overridden, not cleared** — the listed variables are set explicitly and `LD_LIBRARY_PATH` is unset; anything else `su` passes through is left as is
-- **No SELinux domain switching** — no `runcon`, no domain impersonation; `fscreate` is set so new files get the correct `app_data_file` label with the app's MCS categories, making them indistinguishable from files created by native Termux
+- **Inputs:** only two external inputs — the shell symlink target and, with `-c`, the command string. Everything else is hardcoded paths and integer `stat` output
+- **No data sourced** — not `passwd`, not cache files, not `/proc/<pid>/environ`; only existence/symlink checks run as root
+- **Environment overridden, not cleared** — variables are set explicitly; `LD_LIBRARY_PATH` is unset; anything else `su` passes through is left as-is
+- **No SELinux domain switching** — process stays `u:r:ksu:s0`; only file-create context is set via `fscreate`, making new files indistinguishable from those created by native Termux
 - **Injection-immune GID detection** — `stat` returns integers; integers cannot contain shell syntax
-- **No cache files** — nothing written to disk, nothing sourced back
+- **Preload library integrity** — `chown` to Termux UID and `chcon` to Termux's SELinux context are verified before launch; root-owned preload is rejected
 
 ---
 
