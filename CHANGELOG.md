@@ -1,3 +1,7 @@
+## v2.1
+
+- fix: clang missing and bad chown both hard-die; remove unsafe fallback (65da5a7)
+
 ## v2.0
 
 - feat: LD_PRELOAD fscreate bridge for correct SELinux MCS on file creation; add ZDOTDIR; clang missing -> warn not die (35c9af5)
