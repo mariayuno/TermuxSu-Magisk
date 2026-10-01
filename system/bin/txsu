@@ -126,8 +126,23 @@ build_preload() {
     fi
 
     if [ -z "$CLANG" ]; then
-        warn "clang not found; SELinux fscreate fix disabled. Install: pkg install clang"
-        return 1
+        die "$(cat <<ERRMSG
+╔══════════════════════════════════════════════════════╗
+║               !! DANGER — DO NOT IGNORE !!           ║
+╠══════════════════════════════════════════════════════╣
+║  clang is not installed in Termux.                   ║
+║                                                      ║
+║  Without it, txsu cannot build the SELinux context   ║
+║  bridge. Running without it means EVERY FILE you     ║
+║  create in this shell will have the WRONG SELinux    ║
+║  label and will be UNREADABLE by native Termux.      ║
+║                                                      ║
+║  Fix: open Termux and run:                           ║
+║       pkg install clang                              ║
+║  Then retry txsu.                                    ║
+╚══════════════════════════════════════════════════════╝
+ERRMSG
+)"
     fi
 
     echo "txsu: building SELinux preload library..." >&2
@@ -172,7 +187,8 @@ EOF
         "$TXSU_SRC" ||
         die "failed to build $TXSU_LIB"
 
-    chown "$TUID:$TGID" "$TXSU_LIB" 2>/dev/null || true
+    chown "$TUID:$TGID" "$TXSU_LIB" ||
+        die "failed to set ownership on $TXSU_LIB — aborting to prevent root-owned preload corrupting Termux files"
     chcon "$TERMUX_HOME_CTX" "$TXSU_LIB" 2>/dev/null || true
     chmod 755 "$TXSU_LIB"
 
@@ -182,7 +198,7 @@ EOF
         die "preload library was not created"
 }
 
-build_preload || TXSU_LIB=""
+build_preload
 
 # ============================================================================
 # Optional command passthrough
