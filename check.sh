@@ -87,12 +87,12 @@ check_readme "shell exe check"    'resolved shell'
 check_readme "ZDOTDIR .config/zsh" '.config/zsh'
 check_readme "soft SGID"          'continuing without it'
 check_readme "-c parse"           'leading `-c CMD`'
-check_readme "TXSU_CMD env"       '`TXSU_CMD` before calling `su`'
+check_readme "TXSU_CMD env"       'TXSU_CMD` is exported before calling'
 check_readme "SUPP_GROUPS"        '`SUPP_GROUPS`'
 check_readme "unquoted split"     'intentionally left unquoted'
 check_readme "TUID"               '`TUID`'
 check_readme "LD_LIBRARY_PATH"    'LD_LIBRARY_PATH'
-check_readme "cd failure"         'exit 1 if it fails'
+check_readme "cd failure"         'cd "$TERMUX_HOME" || exit 1'
 check_readme "-c exec"            'SHELL -c'
 check_readme "-l -i exec"         '-l -i'
 check_readme "RC"                 '`RC`'
@@ -100,12 +100,12 @@ check_readme "exit message"       'shell exited with status'
 check_readme "LANG default"       '${LANG:-en_US.UTF-8}'
 check_readme "fscreate"           'fscreate'
 check_readme "MCS categories"     'MCS'
-check_readme "FSCREATE_CTX var"   '`FSCREATE_CTX`'
+check_readme "SELinux ctx var"    '`TERMUX_HOME_CTX`'
 
 # ── Script has no stale strings ───────────────────────────────────────────────
 stale_script() { bar; grep -qF -- "$2" "$S" && fail "stale in script: $1" || ok "not in script: $1"; }
 stale_script "old chsh wrapper"   'chsh()'
-stale_script "echo fscreate"      "echo '\$FSCREATE_CTX'"
+stale_script "old chsh wrapper"   "chsh()"
 
 # ── README has no stale strings ───────────────────────────────────────────────
 stale_readme() { bar; grep -qF -- "$2" "$R" && fail "stale in README: $1" || ok "not in README: $1"; }

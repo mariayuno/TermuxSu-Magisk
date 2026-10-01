@@ -159,7 +159,7 @@ txsu -c "pkg upgrade -y"
 txsu -c "python3 /data/local/myscript.py"
 ```
 
-Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra arguments after `CMD` are ignored.
+Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra arguments after `CMD` are ignored. `TXSU_CMD` is exported before calling `su` so it crosses the exec boundary as an environment variable rather than being interpolated into the inner shell string.
 
 ---
 
@@ -353,8 +353,8 @@ Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra a
 | `TUID` | `stat '%u' TERMUX_DATA` | Termux app UID |
 | `TGID` | `stat '%g' TERMUX_DATA` | Termux app GID |
 | `IGID` | `stat '%g' /dev/socket/dnsproxyd` | `inet` group — gates network socket access |
-| `SGID` | `stat '%g' /storage` | storage group — gates sdcard/FUSE access *(soft: skipped with warning if absent)* |
-| `TERMUX_HOME_CTX` | `stat '%C' TERMUX_HOME` | Full SELinux context of Termux HOME (e.g. `u:object_r:app_data_file:s0:c172,…`) |
+| `SGID` | `stat '%g' /storage` | storage group — gates sdcard/FUSE access *(soft: skipped with warning if absent)* *(soft: skipped with warning if absent, continuing without it)* |
+| `TERMUX_HOME_CTX` | `stat '%C' TERMUX_HOME` | Full SELinux context including MCS categories of Termux HOME (e.g. `u:object_r:app_data_file:s0:c172,…`) |
 | `SUPP_GROUPS` | `-G IGID [-G SGID]` | Supplementary-group args for `su` (intentionally unquoted for word-splitting) |
 | `TXSU_CMD` | from `-c`, else empty | Command for non-interactive mode |
 | `RC` | exit status of `su` | Printed if non-zero; returned by `txsu` |
@@ -364,6 +364,8 @@ Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra a
 ### Preflight Checks
 
 ```sh
+die() { echo "txsu: ERROR: $*" >&2; exit 1; }
+
 [ "$(id -u)" = 0 ]    || die "must run as root"
 [ -x "$SU" ]          || die "su not found: $SU"
 [ -d "$TERMUX_DATA" ] || die "Termux data directory not found"
@@ -463,7 +465,7 @@ TERMUX_HOME_CTX="$(stat -c '%C' "$TERMUX_HOME")" || die "cannot determine SELinu
 </details>
 
 <details>
-<summary>💡 Why is inet a hard failure but storage is not?</summary>
+<summary>💡 Why is inet a soft failure (warning only) like storage — the shell still opens, but networking will be broken but storage is not?</summary>
 
 Without `inet`, DNS is broken and every network call fails. That's an unusable shell.
 
@@ -565,12 +567,14 @@ If `libtxsu-fscreate.so` were owned by root and had the wrong SELinux label, loa
 |---|---|---|
 | `-g TGID` | Termux GID | Primary group |
 | `-G IGID` | inet GID | Supplementary: network socket access |
-| `-G SGID` | storage GID | Supplementary: sdcard/FUSE access *(omitted if unavailable)* |
+| `-G SGID` | storage GID | Supplementary: sdcard/FUSE access *(omitted if unavailable)* *(soft: omitted with a warning if `/storage` unavailable)* |
 | `TUID` | Termux UID | UID switch from 0 |
 | `/system/bin/sh -c INNER` | inner script | Intermediate shell that sets env before exec |
 | `txsu … $9` | positional args | All dynamic values passed as data, not embedded in the script string |
 
 All dynamic values are passed as positional arguments `$1`–`$9`. Nothing is interpolated into the `$INNER` script string itself — which means no quoting issues regardless of what those values contain.
+
+`$SUPP_GROUPS` is intentionally left unquoted so shell word-splitting passes each `-G <gid>` pair as separate arguments to `su`.
 
 ---
 
@@ -585,10 +589,10 @@ Inside the inner `sh -c`, positional args are unpacked and the environment is bu
 | `HOME` | `$TERMUX_HOME` |
 | `PREFIX` | `$TERMUX_PREFIX` |
 | `SHELL` | resolved shell binary |
-| `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG only)* |
+| `ZDOTDIR` | `~/.config/zsh` *(zsh + XDG only)* |  *(passed via `TXSU_ZDOTDIR` environment variable)*
 | `TMPDIR` | `$PREFIX/tmp` |
 | `TERM` | `xterm-256color` |
-| `LANG` | inherited if set, else `en_US.UTF-8` |
+| `LANG` | inherited if set, else `en_US.UTF-8` (`${LANG:-en_US.UTF-8}`) |
 
 **🔵 Group B — Termux Internal**
 
