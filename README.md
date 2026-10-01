@@ -64,6 +64,23 @@ You get a **broken impostor** that looks like one.
 
 ---
 
+## ✅ Requirements
+
+| Requirement | How to satisfy |
+|---|---|
+| Rooted Android | Magisk, KernelSU, ResuKiSU, or APatch |
+| `/system/bin/su` | Provided automatically by any root implementation above |
+| Termux | Install from **F-Droid or GitHub**, then **open it once** to bootstrap (`bash`, `termux-exec`, and the base filesystem are set up on first launch) |
+| `clang` | Run `pkg install clang` inside Termux — required to build the SELinux preload library; **txsu refuses to launch without it** |
+
+> ⚠️ **Prefer F-Droid or GitHub.** The Google Play build is experimental. Install from [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases).
+
+---
+
+## 🗺 How It Works — Full Flo
+
+---
+
 ## ⚡ Try It Now — No Install Required
 
 Run this in a **root shell** to try `txsu` without touching your system:
@@ -167,20 +184,7 @@ Only a leading `-c CMD` is parsed. `-c` without an argument is an error. Extra a
 
 ---
 
-## ✅ Requirements
-
-| Requirement | How to satisfy |
-|---|---|
-| Rooted Android 7.0+ | Magisk, KernelSU, ResuKiSU, or APatch |
-| `/system/bin/su` | Provided automatically by any root implementation above |
-| Termux | Install from **F-Droid or GitHub**, then **open it once** to bootstrap (`bash`, `termux-exec`, and the base filesystem are set up on first launch) |
-| `clang` | Run `pkg install clang` inside Termux — required to build the SELinux preload library; **txsu refuses to launch without it** |
-
-> ⚠️ **Prefer F-Droid or GitHub.** The Google Play build is experimental. Install from [F-Droid](https://f-droid.org/en/packages/com.termux/) or [GitHub releases](https://github.com/termux/termux-app/releases).
-
----
-
-## 🗺 How It Works — Full Flowchart
+wchart
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
