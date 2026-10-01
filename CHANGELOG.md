@@ -1,3 +1,7 @@
+## v2.0
+
+- feat: LD_PRELOAD fscreate bridge for correct SELinux MCS on file creation; add ZDOTDIR; clang missing -> warn not die (35c9af5)
+
 ## v1.9
 
 - chore: add check.sh consistency checker (51 checks, progress bar) (0c5342b)
