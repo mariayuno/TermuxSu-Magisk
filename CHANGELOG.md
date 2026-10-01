@@ -1,3 +1,8 @@
+## v2.2
+
+- docs: fix README/check.sh gaps (SGID soft, TXSU_CMD env, MCS, cd failure, stale tokens) (9f65376)
+- docs: full README rewrite to match new preload-based SELinux fix (9b30ff0)
+
 ## v2.1
 
 - fix: clang missing and bad chown both hard-die; remove unsafe fallback (65da5a7)
