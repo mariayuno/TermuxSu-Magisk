@@ -1,6 +1,6 @@
 #!/system/bin/sh
 
-# txsu
+# txsu — Root-to-Termux shell bridge
 # Root -> Termux shell bridge with dynamic SELinux MCS file creation context.
 
 SU=/system/bin/su
