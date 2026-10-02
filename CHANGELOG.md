@@ -1,3 +1,7 @@
+## v2.5
+
+- fix: guard fscreate constructor to shell process only; fixes nvim --embed crash (64db788)
+
 ## v2.4
 
 - chore: trigger release for fish -l fix (47a41ee)
