@@ -1,3 +1,9 @@
+## v2.3
+
+- fix: drop -l for fish shell to fix nvim terminal probing; keep -l -i for bash/zsh (9165f94)
+- docs: move requirements before Try It Now; drop Android version mention (9a2d166)
+- docs: simplify requirements to bare minimum (clang explicit, bootstrap implicit) (0a8163e)
+
 ## v2.2
 
 - docs: fix README/check.sh gaps (SGID soft, TXSU_CMD env, MCS, cd failure, stale tokens) (9f65376)
