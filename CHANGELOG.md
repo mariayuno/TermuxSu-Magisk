@@ -1,3 +1,7 @@
+## v2.4
+
+- chore: trigger release for fish -l fix (47a41ee)
+
 ## v2.3
 
 - fix: drop -l for fish shell to fix nvim terminal probing; keep -l -i for bash/zsh (9165f94)
