@@ -281,7 +281,10 @@ echo "txsu: fscreate target   : $TXSU_FSCREATE" >&2
 if [ -n "$TXSU_CMD" ]; then
     exec "$TERMUX_SHELL" -c "$TXSU_CMD"
 else
-    exec "$TERMUX_SHELL" -l -i
+    case "$TERMUX_SHELL" in
+        */fish) exec "$TERMUX_SHELL" -i ;;
+        *)      exec "$TERMUX_SHELL" -l -i ;;
+    esac
 fi
 '
 
