@@ -1,0 +1,26 @@
+#!/system/bin/sh
+set -u
+
+# TXSU namespace stage.
+# Runs first as root inside the fresh mount namespace.
+
+TXSU_CHILD="${TXSU_HOME:-/data/data/com.termux/files/home}/.txsu/child"
+
+/system/bin/mount -o rslave rootfs / || {
+    echo 'txsu: rslave setup failed' >&2
+    exit 1
+}
+
+set -- -W -p -g "$TXSU_UID"
+
+for gid in $TXSU_GROUPS; do
+    set -- "$@" -G "$gid"
+done
+
+set -- \
+    "$@" \
+    -Z "$TXSU_CONTEXT" \
+    "$TXSU_UID" \
+    -c "/system/bin/sh $TXSU_CHILD"
+
+exec /system/bin/su "$@"

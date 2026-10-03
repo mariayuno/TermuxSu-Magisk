@@ -1,0 +1,145 @@
+#!/system/bin/sh
+set -u
+
+DATA="$TXSU_DATA"
+PREFIX="$TXSU_PREFIX"
+HOME_DIR="$TXSU_HOME"
+
+# Preserve terminal/session variables captured by the root controller.
+export TERM="${TXSU_TERM:-xterm-256color}"
+export COLORTERM="${TXSU_COLORTERM:-}"
+export TERM_PROGRAM="${TXSU_TERM_PROGRAM:-}"
+export SSH_TTY="${TXSU_SSH_TTY:-}"
+export SSH_CLIENT="${TXSU_SSH_CLIENT:-}"
+export SSH_CONNECTION="${TXSU_SSH_CONNECTION:-}"
+export LANG="${TXSU_LANG:-}"
+export LC_ALL="${TXSU_LC_ALL:-}"
+export LC_CTYPE="${TXSU_LC_CTYPE:-}"
+
+# Establish the Termux filesystem identity before any login logic.
+export HOME="$HOME_DIR"
+export PREFIX="$PREFIX"
+export PWD="$HOME_DIR"
+export PATH="$PREFIX/bin"
+export TMPDIR="$PREFIX/tmp"
+
+cd "$HOME_DIR" || {
+    echo "txsu: cannot cd to $HOME_DIR" >&2
+    exit 1
+}
+
+USER_NAME="$(id -un 2>/dev/null || true)"
+[ -n "$USER_NAME" ] || USER_NAME="u0_a$(( $(id -u) % 100000 ))"
+export USER="$USER_NAME"
+export LOGNAME="$USER_NAME"
+
+# Do not leak the root controller's shell/linker state into Termux.
+unset SHELL
+unset MAIL
+unset OLDPWD
+unset BASH_ENV
+unset ENV
+unset LD_LIBRARY_PATH
+unset LD_PRELOAD
+
+# Termux-owned base environment.
+if [ -r "$PREFIX/etc/termux/termux.env" ]; then
+    . "$PREFIX/etc/termux/termux.env"
+fi
+
+# Reassert invariants after termux.env.
+export HOME="$HOME_DIR"
+export PREFIX="$PREFIX"
+export PWD="$HOME_DIR"
+export PATH="$PREFIX/bin"
+export TMPDIR="$PREFIX/tmp"
+export USER="$USER_NAME"
+export LOGNAME="$USER_NAME"
+
+export TERMUX_VERSION="${TXSU_VERSION_NAME:-}"
+
+# Termux >= 0.119 rootfs/app environment paths.
+export TERMUX__PROJECT_DIR="$DATA/termux"
+export TERMUX__CORE_DIR="$DATA/termux/core"
+export TERMUX__APPS_DIR="$DATA/termux/apps"
+export TERMUX__CACHE_DIR="$DATA/cache"
+export TERMUX__ROOTFS="$DATA/files"
+export TERMUX__ROOTFS_DIR="$DATA/files"
+export TERMUX__HOME="$HOME_DIR"
+export TERMUX__PREFIX="$PREFIX"
+
+# Donor-independent subset of TermuxAppShellEnvironment.
+# Activity/process-specific values such as TERMUX_APP__PID are intentionally
+# not fabricated because txsu is not backed by a live Termux Activity process.
+USER_DATA="/data/user/${TXSU_USER_ID:-0}/com.termux"
+export TERMUX_APP__DATA_DIR="$USER_DATA"
+export TERMUX_APP__LEGACY_DATA_DIR="$DATA"
+export TERMUX_APP__FILES_DIR="$USER_DATA/files"
+export TERMUX_APP__PACKAGE_NAME='com.termux'
+export TERMUX_APP__UID="${TXSU_UID:-}"
+export TERMUX_APP__TARGET_SDK="${TXSU_TARGET_SDK:-}"
+export TERMUX_APP__VERSION_NAME="${TXSU_VERSION_NAME:-}"
+export TERMUX_APP__VERSION_CODE="${TXSU_VERSION_CODE:-}"
+export TERMUX_APP__APK_PATH="${TXSU_APK_PATH:-}"
+export TERMUX_APP__IS_DEBUGGABLE_BUILD="${TXSU_DEBUGGABLE:-false}"
+export TERMUX_APP__IS_INSTALLED_ON_EXTERNAL_STORAGE='false'
+export TERMUX_APP__SE_FILE_CONTEXT="${TXSU_HOME_LABEL:-}"
+export TERMUX_APP__SE_PROCESS_CONTEXT="${TXSU_CONTEXT:-}"
+export TERMUX_APP__USER_ID="${TXSU_USER_ID:-0}"
+export TXSU_DONORLESS=1
+case "login" in
+    clean)
+        export SHELL="$PREFIX/bin/bash"
+        export PS1='[txsu-clean] \w # '
+        exec "$PREFIX/bin/bash" --noprofile --norc -i
+        ;;
+
+    identity)
+        echo '=== ID ==='
+        id
+        echo '=== SELINUX ==='
+        cat /proc/self/attr/current
+        echo '=== MOUNT ==='
+        readlink /proc/self/ns/mnt
+        echo '=== CWD ==='
+        pwd
+        echo '=== HOME ==='
+        ls -ldZ "$HOME"
+        echo '=== FILE LABEL ==='
+        TEST="$HOME/.txsu-proof.$$"
+        if : >"$TEST" 2>/dev/null; then
+            ls -lZ "$TEST"
+            rm -f "$TEST"
+            echo 'creation: OK'
+        else
+            echo 'creation: FAILED'
+        fi
+        export SHELL="$PREFIX/bin/bash"
+        export PS1='[txsu-identity] \w # '
+        exec "$PREFIX/bin/bash" --noprofile --norc -i
+        ;;
+
+    env)
+        echo '=== ENV ==='
+        env | sort
+        echo '=== ID ==='
+        id
+        echo '=== SELINUX ==='
+        cat /proc/self/attr/current
+        echo '=== CWD ==='
+        pwd
+        echo '=== MOUNT ==='
+        readlink /proc/self/ns/mnt
+        export SHELL="$PREFIX/bin/bash"
+        export PS1='[txsu-env] \w # '
+        exec "$PREFIX/bin/bash" --noprofile --norc -i
+        ;;
+    login)
+        exec "$PREFIX/bin/login"
+        ;;
+
+    *)
+        echo "txsu: unknown MODE=$MODE" >&2
+        exit 2
+        ;;
+esac

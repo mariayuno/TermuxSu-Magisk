@@ -1,324 +1,313 @@
 #!/system/bin/sh
+set -u
 
-# txsu — Root-to-Termux shell bridge
-# Root -> Termux shell bridge with dynamic SELinux MCS file creation context.
+TXSU_VERSION='2.0.0-donorless'
+PKG='com.termux'
+DATA='/data/data/com.termux'
+PREFIX="$DATA/files/usr"
+HOME_DIR="$DATA/files/home"
+BASE="$HOME_DIR/.txsu"
+NS="$BASE/ns"
+CHILD="$BASE/child"
+SU='/system/bin/su'
+MODE='login'
+DEBUG=0
 
-SU=/system/bin/su
+usage() {
+    printf '%s\n' \
+        "txsu $TXSU_VERSION" \
+        'Usage: txsu [options]' \
+        '' \
+        '  txsu' \
+        '  txsu --clean' \
+        '  txsu --env' \
+        '  txsu --identity' \
+        '  txsu --debug' \
+        '  txsu --help' \
+        '  txsu --version'
+}
 
-TERMUX_DATA=/data/data/com.termux
-TERMUX_FILES="$TERMUX_DATA/files"
-TERMUX_PREFIX="$TERMUX_FILES/usr"
-TERMUX_HOME="$TERMUX_FILES/home"
-TERMUX_EXEC="$TERMUX_PREFIX/lib/libtermux-exec.so"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --clean) MODE='clean' ;;
+        --env) MODE='env' ;;
+        --identity) MODE='identity' ;;        --debug) DEBUG=1 ;;
+        --version|-V)
+            echo "txsu $TXSU_VERSION"
+            exit 0
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "txsu: unknown option: $1" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
 
-TXSU_LIB="$TERMUX_PREFIX/lib/libtxsu-fscreate.so"
-TXSU_SRC="$TERMUX_PREFIX/tmp/txsu-fscreate.c"
-
-die() {
-    echo "txsu: ERROR: $*" >&2
+[ "$(id -u)" = '0' ] || {
+    echo 'txsu: root required' >&2
     exit 1
 }
 
-warn() {
-    echo "txsu: WARNING: $*" >&2
+[ -d "$DATA" ] || {
+    echo "txsu: missing $DATA" >&2
+    exit 1
 }
 
-# ============================================================================
-# Basic validation
-# ============================================================================
+[ -d "$PREFIX" ] || {
+    echo "txsu: missing $PREFIX" >&2
+    exit 1
+}
 
-[ "$(id -u)" = 0 ] || die "must run as root"
-[ -x "$SU" ] || die "su not found: $SU"
-[ -d "$TERMUX_DATA" ] || die "Termux data directory not found: $TERMUX_DATA"
-[ -d "$TERMUX_HOME" ] || die "Termux HOME not found: $TERMUX_HOME"
-[ -d "$TERMUX_PREFIX" ] || die "Termux PREFIX not found: $TERMUX_PREFIX"
-[ -f "$TERMUX_EXEC" ] || die "libtermux-exec.so not found"
+[ -d "$HOME_DIR" ] || {
+    echo "txsu: missing $HOME_DIR" >&2
+    exit 1
+}
 
-# ============================================================================
-# Detect the user's Termux shell
-# ============================================================================
+[ -x "$SU" ] || {
+    echo "txsu: missing $SU" >&2
+    exit 1
+}
 
-TERMUX_SHELL_LINK="$TERMUX_HOME/.termux/shell"
+[ -x /system/bin/unshare ] || {
+    echo 'txsu: missing unshare' >&2
+    exit 1
+}
 
-if [ -x "$TERMUX_SHELL_LINK" ]; then
-    TERMUX_SHELL="$(readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null || true)"
-    [ -n "$TERMUX_SHELL" ] || TERMUX_SHELL="$TERMUX_SHELL_LINK"
-elif [ -x "$TERMUX_PREFIX/bin/zsh" ]; then
-    TERMUX_SHELL="$TERMUX_PREFIX/bin/zsh"
-elif [ -x "$TERMUX_PREFIX/bin/bash" ]; then
-    TERMUX_SHELL="$TERMUX_PREFIX/bin/bash"
-else
-    die "no usable Termux shell found"
-fi
+[ -x "$PREFIX/bin/login" ] || {
+    echo 'txsu: missing Termux login' >&2
+    exit 1
+}
 
-[ -x "$TERMUX_SHELL" ] || die "shell is not executable: $TERMUX_SHELL"
+[ -x "$NS" ] || {
+    echo "txsu: missing $NS" >&2
+    exit 1
+}
 
-# ============================================================================
-# Termux UID / GID
-# ============================================================================
+[ -x "$CHILD" ] || {
+    echo "txsu: missing $CHILD" >&2
+    exit 1
+}
 
-TUID="$(stat -c '%u' "$TERMUX_DATA" 2>/dev/null)" ||
-    die "cannot determine Termux UID"
+TERMUX_UID="$(stat -c '%u' "$DATA" 2>/dev/null || true)"
 
-TGID="$(stat -c '%g' "$TERMUX_DATA" 2>/dev/null)" ||
-    die "cannot determine Termux GID"
+[ -n "$TERMUX_UID" ] || {
+    echo 'txsu: cannot determine Termux UID' >&2
+    exit 1
+}
 
-[ -n "$TUID" ] || die "invalid Termux UID"
-[ -n "$TGID" ] || die "invalid Termux GID"
+ANDROID_USER_ID=$((TERMUX_UID / 100000))
+ANDROID_APP_ID=$((TERMUX_UID % 100000))
+ANDROID_APP_OFFSET=$((ANDROID_APP_ID - 10000))
 
-# ============================================================================
-# Android supplementary groups
-# ============================================================================
+[ "$ANDROID_APP_OFFSET" -ge 0 ] || {
+    echo 'txsu: invalid app UID' >&2
+    exit 1
+}
 
-IGID=""
-
-if [ -e /dev/socket/dnsproxyd ]; then
-    IGID="$(stat -c '%g' /dev/socket/dnsproxyd 2>/dev/null || true)"
-fi
-
-SGID=""
-
-if [ -e /storage ]; then
-    SGID="$(stat -c '%g' /storage 2>/dev/null || true)"
-fi
-
-SUPP_GROUPS=""
-
-[ -n "$IGID" ] && SUPP_GROUPS="$SUPP_GROUPS -G $IGID"
-[ -n "$SGID" ] && SUPP_GROUPS="$SUPP_GROUPS -G $SGID"
-
-# ============================================================================
-# Dynamically obtain Termux's actual SELinux file context.
-#
-# Example:
-#   u:object_r:app_data_file:s0:c172,c256,c512,c768
-#
-# Nothing below hardcodes the MCS categories.
-# ============================================================================
-
-TERMUX_HOME_CTX="$(stat -c '%C' "$TERMUX_HOME" 2>/dev/null)" ||
-    die "cannot determine Termux HOME SELinux context"
-
-[ -n "$TERMUX_HOME_CTX" ] ||
-    die "Termux HOME SELinux context is empty"
-
-echo "txsu: UID              : $TUID" >&2
-echo "txsu: GID              : $TGID" >&2
-echo "txsu: shell            : $TERMUX_SHELL" >&2
-echo "txsu: file context     : $TERMUX_HOME_CTX" >&2
-
-# ============================================================================
-# Build the preload helper once.
-#
-# The constructor runs inside every dynamically linked process which inherits
-# LD_PRELOAD and sets /proc/self/attr/fscreate before main().
-# ============================================================================
-
-build_preload() {
-    [ -f "$TXSU_LIB" ] && return 0
-
-    local CLANG=""
-
-    if [ -x "$TERMUX_PREFIX/bin/clang" ]; then
-        CLANG="$TERMUX_PREFIX/bin/clang"
-    elif [ -x "$TERMUX_PREFIX/bin/cc" ]; then
-        CLANG="$TERMUX_PREFIX/bin/cc"
-    fi
-
-    if [ -z "$CLANG" ]; then
-        die "$(cat <<ERRMSG
-╔══════════════════════════════════════════════════════╗
-║               !! DANGER — DO NOT IGNORE !!           ║
-╠══════════════════════════════════════════════════════╣
-║  clang is not installed in Termux.                   ║
-║                                                      ║
-║  Without it, txsu cannot build the SELinux context   ║
-║  bridge. Running without it means EVERY FILE you     ║
-║  create in this shell will have the WRONG SELinux    ║
-║  label and will be UNREADABLE by native Termux.      ║
-║                                                      ║
-║  Fix: open Termux and run:                           ║
-║       pkg install clang                              ║
-║  Then retry txsu.                                    ║
-╚══════════════════════════════════════════════════════╝
-ERRMSG
+TARGET_SDK="$(
+    dumpsys package "$PKG" 2>/dev/null |
+    grep -m1 -o 'targetSdk=[0-9][0-9]*' |
+    cut -d= -f2
 )"
-    fi
 
-    echo "txsu: building SELinux preload library..." >&2
-
-    mkdir -p "$TERMUX_PREFIX/tmp" ||
-        die "cannot create Termux tmp directory"
-
-    cat > "$TXSU_SRC" <<'EOF'
-#include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-__attribute__((constructor))
-static void txsu_set_fscreate(void)
-{
-    const char *ctx = getenv("TXSU_FSCREATE");
-    int fd;
-
-    if (!ctx || !*ctx)
-        return;
-
-    fd = open(
-        "/proc/self/attr/fscreate",
-        O_WRONLY | O_CLOEXEC
-    );
-
-    if (fd < 0)
-        return;
-
-    (void)write(fd, ctx, strlen(ctx));
-    close(fd);
-}
-EOF
-
-    "$CLANG" \
-        -shared \
-        -fPIC \
-        -O2 \
-        -Wl,-soname,libtxsu-fscreate.so \
-        -o "$TXSU_LIB" \
-        "$TXSU_SRC" ||
-        die "failed to build $TXSU_LIB"
-
-    chown "$TUID:$TGID" "$TXSU_LIB" ||
-        die "failed to set ownership on $TXSU_LIB — aborting to prevent root-owned preload corrupting Termux files"
-    chcon "$TERMUX_HOME_CTX" "$TXSU_LIB" 2>/dev/null || true
-    chmod 755 "$TXSU_LIB"
-
-    rm -f "$TXSU_SRC"
-
-    [ -f "$TXSU_LIB" ] ||
-        die "preload library was not created"
+[ -n "$TARGET_SDK" ] || {
+    echo 'txsu: cannot determine target SDK' >&2
+    exit 1
 }
 
-build_preload
-
-# ============================================================================
-# Optional command passthrough
-# ============================================================================
-
-TXSU_CMD=""
-
-# ZDOTDIR: set for zsh only when ~/.config/zsh exists.
-ZDOTDIR_EXPORT=""
-case "$TERMUX_SHELL" in
-    */zsh)
-        [ -d "$TERMUX_HOME/.config/zsh" ] && ZDOTDIR_EXPORT="$TERMUX_HOME/.config/zsh"
+case "$TARGET_SDK" in
+    34|35|36|37|38|39|40|41|42|43|44|45|46|47|48|49)
+        DOMAIN='untrusted_app'
+        ;;
+    32|33)
+        DOMAIN='untrusted_app_32'
+        ;;
+    30|31)
+        DOMAIN='untrusted_app_30'
+        ;;
+    29)
+        DOMAIN='untrusted_app_29'
+        ;;
+    26|27|28)
+        DOMAIN='untrusted_app_27'
+        ;;
+    *)
+        DOMAIN='untrusted_app_25'
         ;;
 esac
 
-if [ "$1" = "-c" ]; then
-    [ -n "$2" ] || die "-c requires an argument"
-    TXSU_CMD="$2"
-fi
+C1=$((ANDROID_APP_OFFSET & 255))
+C2=$((256 + ((ANDROID_APP_OFFSET >> 8) & 255)))
+C3=$((512 + (ANDROID_USER_ID & 255)))
+C4=$((768 + ((ANDROID_USER_ID >> 8) & 255)))
 
-# ============================================================================
-# Root -> Termux inner shell
-#
-# All values are passed as positional parameters to avoid nested quoting.
-# ============================================================================
+CONTEXT="u:r:${DOMAIN}:s0:c${C1},c${C2},c${C3},c${C4}"
 
-INNER='
-TERMUX_HOME="$1"
-TERMUX_PREFIX="$2"
-TERMUX_FILES="$3"
-TERMUX_DATA="$4"
-TERMUX_SHELL="$5"
-TERMUX_EXEC="$6"
-TERMUX_FSCTX="$7"
-TERMUX_PRELOAD="$8"
-TXSU_CMD="$9"
+PACKAGE_GIDS="$(
+    dumpsys package "$PKG" 2>/dev/null |
+    sed -n 's/.*gids=\[\([0-9][0-9, ]*\)\].*/\1/p' |
+    head -n1 |
+    tr ',' ' '
+)"
 
-export HOME="$TERMUX_HOME"
-export PREFIX="$TERMUX_PREFIX"
+CACHE_GID=$((20000 + ANDROID_APP_OFFSET))
+SHARED_GID=$((50000 + ANDROID_APP_OFFSET))
+SUPP_GIDS=''
 
-export TERM="xterm-256color"
-export LANG="${LANG:-en_US.UTF-8}"
+append_gid() {
+    g="$1"
+    [ -n "$g" ] || return 0
 
-export TERMUX__ROOTFS_DIR="$TERMUX_FILES"
-export TERMUX__HOME="$TERMUX_HOME"
-export TERMUX__PREFIX="$TERMUX_PREFIX"
-export TERMUX__UID="$(id -u)"
-
-export TERMUX_APP__PACKAGE_NAME="com.termux"
-export TERMUX_APP__DATA_DIR="$TERMUX_DATA"
-
-export SHELL="$TERMUX_SHELL"
-[ -n "$TXSU_ZDOTDIR" ] && export ZDOTDIR="$TXSU_ZDOTDIR"
-export EXTERNAL_STORAGE="/sdcard"
-
-export ANDROID_ROOT="/system"
-export ANDROID_DATA="/data"
-export ANDROID_STORAGE="/storage"
-export ANDROID_ASSETS="/system/app"
-export ANDROID_ART_ROOT="/apex/com.android.art"
-export ANDROID_I18N_ROOT="/apex/com.android.i18n"
-export ANDROID_TZDATA_ROOT="/apex/com.android.tzdata"
-
-export PATH="$TERMUX_PREFIX/bin:$TERMUX_PREFIX/bin/applets:/system/bin:/system/xbin:/system/sbin:/sbin:/sbin/bin"
-export TMPDIR="$TERMUX_PREFIX/tmp"
-
-unset LD_LIBRARY_PATH
-
-# Dynamic SELinux context supplied by txsu.
-export TXSU_FSCREATE="$TERMUX_FSCTX"
-
-# Keep both our fscreate helper and Termux exec integration.
-export LD_PRELOAD="$TERMUX_PRELOAD:$TERMUX_EXEC"
-
-cd "$TERMUX_HOME" || exit 1
-
-echo "txsu: process context   : $(id -Z 2>/dev/null)" >&2
-echo "txsu: fscreate target   : $TXSU_FSCREATE" >&2
-
-if [ -n "$TXSU_CMD" ]; then
-    exec "$TERMUX_SHELL" -c "$TXSU_CMD"
-else
-    case "$TERMUX_SHELL" in
-        */fish) exec "$TERMUX_SHELL" -i ;;
-        *)      exec "$TERMUX_SHELL" -l -i ;;
+    case " $SUPP_GIDS " in
+        *" $g "*) ;;
+        *) SUPP_GIDS="$SUPP_GIDS $g" ;;
     esac
+}
+
+for g in $PACKAGE_GIDS; do
+    append_gid "$g"
+done
+
+append_gid 9997
+append_gid "$CACHE_GID"
+append_gid "$SHARED_GID"
+append_gid 1077
+
+SUPP_GIDS="$(echo "$SUPP_GIDS" | sed 's/^ *//')"
+
+VERSION_NAME="$(
+    dumpsys package "$PKG" 2>/dev/null |
+    grep -m1 -o 'versionName=[^ ]*' |
+    cut -d= -f2
+)"
+
+VERSION_CODE="$(
+    dumpsys package "$PKG" 2>/dev/null |
+    grep -m1 -o 'versionCode=[0-9][0-9]*' |
+    cut -d= -f2
+)"
+
+APK_PATH="$(
+    cmd package path "$PKG" 2>/dev/null |
+    sed -n 's/^package://p' |
+    head -n1
+)"
+
+FLAGS="$(
+    dumpsys package "$PKG" 2>/dev/null |
+    sed -n 's/.*pkgFlags=\[\([^]]*\)\].*/\1/p' |
+    head -n1
+)"
+
+case " $FLAGS " in
+    *' DEBUGGABLE '*)
+        DEBUGGABLE='true'
+        ;;
+    *)
+        DEBUGGABLE='false'
+        ;;
+esac
+
+HOME_LABEL="$(
+    ls -Zd "$HOME_DIR" 2>/dev/null |
+    awk '{for(i=1;i<=NF;i++) if ($i ~ /^u:object_r:/) {print $i; exit}}'
+)"
+
+[ -n "$HOME_LABEL" ] || {
+    echo 'txsu: cannot determine HOME SELinux label' >&2
+    exit 1
+}
+
+TERM_VALUE="${TERM:-xterm-256color}"
+COLORTERM_VALUE="${COLORTERM:-}"
+TERM_PROGRAM_VALUE="${TERM_PROGRAM:-}"
+
+SSH_TTY_VALUE="${SSH_TTY:-}"
+SSH_CLIENT_VALUE="${SSH_CLIENT:-}"
+SSH_CONNECTION_VALUE="${SSH_CONNECTION:-}"
+
+LANG_VALUE="${LANG:-}"
+LC_ALL_VALUE="${LC_ALL:-}"
+LC_CTYPE_VALUE="${LC_CTYPE:-}"
+
+mkdir -p "$BASE" || {
+    echo 'txsu: cannot create helper directory' >&2
+    exit 1
+}
+
+chown "$TERMUX_UID:$TERMUX_UID" "$BASE" || {
+    echo 'txsu: cannot chown helper directory' >&2
+    exit 1
+}
+
+chmod 700 "$BASE"
+
+chcon "$HOME_LABEL" "$BASE" || {
+    echo "txsu: cannot label helper directory: $HOME_LABEL" >&2
+    exit 1
+}
+
+chmod 700 "$NS" "$CHILD" || exit 1
+
+chown "$TERMUX_UID:$TERMUX_UID" "$NS" "$CHILD" || {
+    echo 'txsu: cannot chown helper files' >&2
+    exit 1
+}
+
+chcon "$HOME_LABEL" "$NS" "$CHILD" || {
+    echo "txsu: cannot label helper files: $HOME_LABEL" >&2
+    exit 1
+}
+
+export TXSU_DEBUG="$DEBUG"
+
+export TXSU_UID="$TERMUX_UID"
+export TXSU_USER_ID="$ANDROID_USER_ID"
+export TXSU_TARGET_SDK="$TARGET_SDK"
+export TXSU_CONTEXT="$CONTEXT"
+export TXSU_GROUPS="$SUPP_GIDS"
+
+export TXSU_DATA="$DATA"
+export TXSU_PREFIX="$PREFIX"
+export TXSU_HOME="$HOME_DIR"
+export TXSU_HOME_LABEL="$HOME_LABEL"
+
+export TXSU_VERSION_NAME="$VERSION_NAME"
+export TXSU_VERSION_CODE="$VERSION_CODE"
+export TXSU_APK_PATH="$APK_PATH"
+export TXSU_DEBUGGABLE="$DEBUGGABLE"
+
+export TXSU_TERM="$TERM_VALUE"
+export TXSU_COLORTERM="$COLORTERM_VALUE"
+export TXSU_TERM_PROGRAM="$TERM_PROGRAM_VALUE"
+
+export TXSU_SSH_TTY="$SSH_TTY_VALUE"
+export TXSU_SSH_CLIENT="$SSH_CLIENT_VALUE"
+export TXSU_SSH_CONNECTION="$SSH_CONNECTION_VALUE"
+
+export TXSU_LANG="$LANG_VALUE"
+export TXSU_LC_ALL="$LC_ALL_VALUE"
+export TXSU_LC_CTYPE="$LC_CTYPE_VALUE"
+
+if [ "$DEBUG" = '1' ]; then
+    {
+        echo "=== txsu $TXSU_VERSION ==="
+        echo "uid=$TERMUX_UID"
+        echo "targetSdk=$TARGET_SDK"
+        echo "context=$CONTEXT"
+        echo "groups=$SUPP_GIDS"
+        echo "home=$HOME_DIR"
+        echo "home_label=$HOME_LABEL"
+        echo "namespace_helper=$NS"
+        echo "child_helper=$CHILD"
+        echo
+        ls -ldZ "$BASE" "$NS" "$CHILD"
+    } >>"$HOME_DIR/.txsu.debug" 2>/dev/null || true
 fi
-'
 
-# ============================================================================
-# Launch as the Termux UID/GID.
-#
-# Do NOT use -Z here.
-# KernelSU remains u:r:ksu:s0; the MCS context is applied to new files.
-# ============================================================================
-
-# Pass ZDOTDIR via environment so the inner shell can pick it up
-export TXSU_ZDOTDIR="$ZDOTDIR_EXPORT"
-
-# shellcheck disable=SC2086
-"$SU" \
-    -g "$TGID" \
-    $SUPP_GROUPS \
-    "$TUID" \
-    /system/bin/sh \
-    -c "$INNER" \
-    txsu \
-    "$TERMUX_HOME" \
-    "$TERMUX_PREFIX" \
-    "$TERMUX_FILES" \
-    "$TERMUX_DATA" \
-    "$TERMUX_SHELL" \
-    "$TERMUX_EXEC" \
-    "$TERMUX_HOME_CTX" \
-    "$TXSU_LIB" \
-    "$TXSU_CMD"
-
-RC=$?
-
-[ "$RC" -ne 0 ] &&
-    echo "txsu: shell exited with status $RC" >&2
-
-exit "$RC"
+exec /system/bin/unshare -m "$NS"
