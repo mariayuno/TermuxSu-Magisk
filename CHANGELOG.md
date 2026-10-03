@@ -1,3 +1,7 @@
+## v2.7
+
+- fix: export TXSU_MODE; fix ns hardcoded fallback; fix child error msg; README: add missing env vars (abf41b6)
+
 ## v2.6
 
 - fix: copy ns+child from /system/bin to ~/.txsu at runtime; fix child MODE; full technical README (bc81d92)
