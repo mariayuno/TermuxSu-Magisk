@@ -139,7 +139,7 @@ case "${TXSU_MODE:-login}" in
         ;;
 
     *)
-        echo "txsu: unknown MODE=$MODE" >&2
+        echo "txsu: unknown MODE=${TXSU_MODE:-login}" >&2
         exit 2
         ;;
 esac

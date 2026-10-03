@@ -4,7 +4,7 @@ set -u
 # TXSU namespace stage.
 # Runs first as root inside the fresh mount namespace.
 
-TXSU_CHILD="${TXSU_HOME:-/data/data/com.termux/files/home}/.txsu/child"
+TXSU_CHILD="$TXSU_HOME/.txsu/child"
 
 /system/bin/mount -o rslave rootfs / || {
     echo 'txsu: rslave setup failed' >&2

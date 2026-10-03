@@ -272,6 +272,7 @@ chcon "$HOME_LABEL" "$NS" "$CHILD" || {
 }
 
 export TXSU_DEBUG="$DEBUG"
+export TXSU_MODE="$MODE"
 
 export TXSU_UID="$TERMUX_UID"
 export TXSU_USER_ID="$ANDROID_USER_ID"
