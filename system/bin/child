@@ -87,7 +87,7 @@ export TERMUX_APP__SE_FILE_CONTEXT="${TXSU_HOME_LABEL:-}"
 export TERMUX_APP__SE_PROCESS_CONTEXT="${TXSU_CONTEXT:-}"
 export TERMUX_APP__USER_ID="${TXSU_USER_ID:-0}"
 export TXSU_DONORLESS=1
-case "login" in
+case "${TXSU_MODE:-login}" in
     clean)
         export SHELL="$PREFIX/bin/bash"
         export PS1='[txsu-clean] \w # '

@@ -83,16 +83,6 @@ done
     exit 1
 }
 
-[ -x "$NS" ] || {
-    echo "txsu: missing $NS" >&2
-    exit 1
-}
-
-[ -x "$CHILD" ] || {
-    echo "txsu: missing $CHILD" >&2
-    exit 1
-}
-
 TERMUX_UID="$(stat -c '%u' "$DATA" 2>/dev/null || true)"
 
 [ -n "$TERMUX_UID" ] || {
@@ -251,6 +241,23 @@ chcon "$HOME_LABEL" "$BASE" || {
     echo "txsu: cannot label helper directory: $HOME_LABEL" >&2
     exit 1
 }
+
+# Copy helpers from module install path to Termux HOME on every run.
+# They must live inside Termux app-data so the app SELinux domain can execute them.
+INSTALLED_NS='/system/bin/ns'
+INSTALLED_CHILD='/system/bin/child'
+
+[ -f "$INSTALLED_NS" ] || {
+    echo "txsu: missing $INSTALLED_NS" >&2
+    exit 1
+}
+[ -f "$INSTALLED_CHILD" ] || {
+    echo "txsu: missing $INSTALLED_CHILD" >&2
+    exit 1
+}
+
+cp "$INSTALLED_NS"    "$NS"    || { echo 'txsu: cannot copy ns helper'    >&2; exit 1; }
+cp "$INSTALLED_CHILD" "$CHILD" || { echo 'txsu: cannot copy child helper' >&2; exit 1; }
 
 chmod 700 "$NS" "$CHILD" || exit 1
 
