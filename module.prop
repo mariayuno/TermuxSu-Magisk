@@ -3,5 +3,5 @@ name=TermuxSu
 version=v2.4
 versionCode=15
 author=mariayuno
-description=Full Termux shell from any root session. Correct UID, groups, env, LD_PRELOAD. No SELinux hacks.
+description=Full native Termux shell from any root session. Correct UID/GID/groups, SELinux domain, MCS, mount namespace. Donorless architecture.
 updateJson=https://raw.githubusercontent.com/mariayuno/TermuxSu-Magisk/main/update.json

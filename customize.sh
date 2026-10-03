@@ -3,15 +3,20 @@
 
 MODPATH="${MODPATH}"
 
-# Ensure txsu is executable
-set_perm "$MODPATH/system/bin/txsu" root root 0755
+# Main controller
+set_perm "$MODPATH/system/bin/txsu"   root root 0755
 
-# Symlinks — create them explicitly so they survive across all root impls
+# Helpers — must be executable; owned by root at module level,
+# but the controller will chown/chcon them to the Termux UID at runtime.
+set_perm "$MODPATH/system/bin/ns"     root root 0755
+set_perm "$MODPATH/system/bin/child"  root root 0755
+
+# Symlinks
 ALIASES="termsu termux txsh trmx"
 for name in $ALIASES; do
   ln -sf txsu "$MODPATH/system/bin/$name"
   set_perm "$MODPATH/system/bin/$name" root root 0755
 done
 
-ui_print "- txsu installed, aliases: $ALIASES"
-# aliases: termsu termux txsh trmx
+ui_print "- txsu installed (ns + child helpers)"
+ui_print "- aliases: $ALIASES"

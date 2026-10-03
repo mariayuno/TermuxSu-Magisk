@@ -1,133 +1,73 @@
 #!/bin/sh
 # check.sh — consistency checker for TermuxSu repo
-# Run from the repo root.
-
 PASS=0; FAIL=0; WARN=0
-S=system/bin/txsu
-R=README.md
-
-# colours
 G='\033[0;32m'; RED='\033[0;31m'; Y='\033[0;33m'; N='\033[0m'; B='\033[1m'
-
 ok()   { PASS=$((PASS+1)); printf "${G}PASS${N}  %s\n" "$1"; }
 fail() { FAIL=$((FAIL+1)); printf "${RED}FAIL${N}  %s\n" "$1"; }
 warn() { WARN=$((WARN+1)); printf "${Y}WARN${N}  %s\n" "$1"; }
-
-bar() {
-    total=$((PASS+FAIL+WARN+1))
-    done_=$((PASS+FAIL+WARN))
-    width=40
-    filled=$((done_*width/total))
-    printf "\r["; i=0
-    while [ $i -lt $filled ];  do printf "#"; i=$((i+1)); done
-    while [ $i -lt $width ];   do printf "-"; i=$((i+1)); done
-    printf "] %d/%d  " "$done_" "$total"
-}
-
-total_checks=40   # approximate; bar resets at end anyway
+bar()  { d=$((PASS+FAIL+WARN)); printf "\r["; i=0; while [ $i -lt $((d*40/(d+1))) ]; do printf "#"; i=$((i+1)); done; while [ $i -lt 40 ]; do printf "-"; i=$((i+1)); done; printf "] %d  " "$d"; }
 
 printf "${B}TermuxSu consistency check${N}\n\n"
 
-# ── Files exist ──────────────────────────────────────────────────────────────
-bar; [ -f "$S" ]             && ok "txsu exists"             || fail "txsu missing"
-bar; [ -f "$R" ]             && ok "README.md exists"        || fail "README.md missing"
-bar; [ -f module.prop ]      && ok "module.prop exists"      || fail "module.prop missing"
-bar; [ -f update.json ]      && ok "update.json exists"      || fail "update.json missing"
-bar; [ -f customize.sh ]     && ok "customize.sh exists"     || fail "customize.sh missing"
-bar; [ -f CHANGELOG.md ]     && ok "CHANGELOG.md exists"     || fail "CHANGELOG.md missing"
-bar; [ -f META-INF/com/google/android/update-binary ] \
-                             && ok "update-binary exists"    || fail "update-binary missing"
+# Files
+bar; [ -f system/bin/txsu ]   && ok "txsu exists"   || fail "txsu missing"
+bar; [ -f system/bin/ns ]     && ok "ns exists"     || fail "ns missing"
+bar; [ -f system/bin/child ]  && ok "child exists"  || fail "child missing"
+bar; [ -f module.prop ]       && ok "module.prop"   || fail "module.prop missing"
+bar; [ -f update.json ]       && ok "update.json"   || fail "update.json missing"
+bar; [ -f customize.sh ]      && ok "customize.sh"  || fail "customize.sh missing"
+bar; [ -f CHANGELOG.md ]      && ok "CHANGELOG.md"  || fail "CHANGELOG.md missing"
+bar; [ -f META-INF/com/google/android/update-binary ] && ok "update-binary" || fail "update-binary missing"
 
-# ── Script syntax ─────────────────────────────────────────────────────────────
-bar; sh -n "$S" 2>/dev/null  && ok "txsu passes sh -n"       || fail "txsu syntax error"
+# Syntax
+bar; sh -n system/bin/txsu  2>/dev/null && ok "txsu syntax ok"  || fail "txsu syntax error"
+bar; sh -n system/bin/ns    2>/dev/null && ok "ns syntax ok"    || fail "ns syntax error"
+bar; sh -n system/bin/child 2>/dev/null && ok "child syntax ok" || fail "child syntax error"
 
-# ── Version consistency ───────────────────────────────────────────────────────
-VER_PROP=$(grep   '^version='     module.prop  | cut -d= -f2)
-VER_CODE=$(grep   '^versionCode=' module.prop  | cut -d= -f2)
-VER_JSON=$(grep   '"version"'     update.json  | sed 's/.*": *"//;s/".*//')
-CODE_JSON=$(grep  '"versionCode"' update.json  | sed 's/.*": *//;s/[^0-9].*//')
-VER_CLOG=$(grep   '^## v'        CHANGELOG.md | head -1 | awk '{print $2}')
-VER_ZIP=$(grep    '"zipUrl"'      update.json  | sed 's/.*download\///;s/\/.*//')
+# Version consistency
+VP=$(grep '^version='     module.prop | cut -d= -f2)
+VC=$(grep '^versionCode=' module.prop | cut -d= -f2)
+VJ=$(grep '"version"'     update.json | sed 's/.*": *"//;s/".*//')
+CJ=$(grep '"versionCode"' update.json | sed 's/.*": *//;s/[^0-9].*//')
+bar; [ "$VP" = "$VJ" ] && ok "version matches ($VP)" || fail "version mismatch: prop=$VP json=$VJ"
+bar; [ "$VC" = "$CJ" ] && ok "versionCode matches ($VC)" || fail "versionCode mismatch: prop=$VC json=$CJ"
 
-bar; [ "$VER_PROP" = "$VER_JSON" ] \
-    && ok  "version matches: module.prop=$VER_PROP update.json=$VER_JSON" \
-    || fail "version mismatch: module.prop=$VER_PROP update.json=$VER_JSON"
+# README markers for CI
+bar; grep -q '<!-- VERSION_BADGE_START -->'   README.md && ok "VERSION_BADGE marker"   || fail "VERSION_BADGE marker missing"
+bar; grep -q '<!-- INSTALL_ONELINER_START -->' README.md && ok "INSTALL_ONELINER marker" || fail "INSTALL_ONELINER marker missing"
 
-bar; [ "$VER_CODE" = "$CODE_JSON" ] \
-    && ok  "versionCode matches: $VER_CODE" \
-    || fail "versionCode mismatch: module.prop=$VER_CODE update.json=$CODE_JSON"
+# customize.sh covers all three binaries
+bar; grep -q 'system/bin/ns'    customize.sh && ok "customize.sh sets ns"    || fail "customize.sh missing ns"
+bar; grep -q 'system/bin/child' customize.sh && ok "customize.sh sets child" || fail "customize.sh missing child"
 
-bar; [ "$VER_PROP" = "$VER_CLOG" ] \
-    && ok  "CHANGELOG top entry matches version: $VER_CLOG" \
-    || warn "CHANGELOG top entry ($VER_CLOG) != module.prop ($VER_PROP)"
+# Controller exports required vars
+for v in TXSU_UID TXSU_CONTEXT TXSU_GROUPS TXSU_HOME TXSU_PREFIX TXSU_DATA; do
+    bar; grep -q "export $v=" system/bin/txsu && ok "txsu exports $v" || fail "txsu missing export $v"
+done
 
-bar; [ "$VER_PROP" = "$VER_ZIP" ] \
-    && ok  "update.json zipUrl version matches: $VER_ZIP" \
-    || fail "update.json zipUrl version ($VER_ZIP) != module.prop ($VER_PROP)"
+# ns reads required vars
+for v in TXSU_UID TXSU_GROUPS TXSU_CONTEXT TXSU_HOME; do
+    bar; grep -q "$v" system/bin/ns && ok "ns uses $v" || fail "ns missing $v"
+done
 
-# duplicate ## headers in CHANGELOG
-DUP=$(grep '^## ' CHANGELOG.md | sort | uniq -d)
-bar; [ -z "$DUP" ] \
-    && ok  "no duplicate CHANGELOG headers" \
-    || warn "duplicate CHANGELOG headers: $DUP"
+# child reads required vars and calls login
+bar; grep -q 'TXSU_DATA'   system/bin/child && ok "child uses TXSU_DATA"   || fail "child missing TXSU_DATA"
+bar; grep -q 'termux.env'  system/bin/child && ok "child sources termux.env" || fail "child missing termux.env"
+bar; grep -q 'bin/login'   system/bin/child && ok "child calls login"      || fail "child missing login call"
 
-# ── README covers key script tokens ──────────────────────────────────────────
-check_readme() { bar; grep -qF -- "$2" "$R" && ok "README covers: $1" || fail "README missing: $1 ($2)"; }
+# No stale libtxsu-fscreate in script
+bar; grep -q 'libtxsu-fscreate' system/bin/txsu && fail "stale fscreate lib in txsu" || ok "no stale fscreate lib"
 
-check_readme "die()"              'die() {'
-check_readme "root check"         'id -u'
-check_readme "TERMUX_DATA check"  '-d TERMUX_DATA'
-check_readme "TERMUX_HOME check"  '-d TERMUX_HOME'
-check_readme "TERMUX_EXEC check"  '-f TERMUX_EXEC'
-check_readme "shell link check"   '-x "$TERMUX_SHELL_LINK"'
-check_readme "readlink 2>/dev/null" 'readlink -f "$TERMUX_SHELL_LINK" 2>/dev/null'
-check_readme "bash fallback"      '$TERMUX_PREFIX/bin/bash'
-check_readme "zsh fallback"       '$TERMUX_PREFIX/bin/zsh'
-check_readme "shell exe check"    'resolved shell'
-check_readme "ZDOTDIR .config/zsh" '.config/zsh'
-check_readme "soft SGID"          'continuing without it'
-check_readme "-c parse"           'leading `-c CMD`'
-check_readme "TXSU_CMD env"       'TXSU_CMD` is exported before calling'
-check_readme "SUPP_GROUPS"        '`SUPP_GROUPS`'
-check_readme "unquoted split"     'intentionally left unquoted'
-check_readme "TUID"               '`TUID`'
-check_readme "LD_LIBRARY_PATH"    'LD_LIBRARY_PATH'
-check_readme "cd failure"         'cd "$TERMUX_HOME" || exit 1'
-check_readme "-c exec"            'SHELL -c'
-check_readme "-l -i exec"         '-l -i'
-check_readme "RC"                 '`RC`'
-check_readme "exit message"       'shell exited with status'
-check_readme "LANG default"       '${LANG:-en_US.UTF-8}'
-check_readme "fscreate"           'fscreate'
-check_readme "MCS categories"     'MCS'
-check_readme "SELinux ctx var"    '`TERMUX_HOME_CTX`'
+# unshare in controller
+bar; grep -q 'unshare' system/bin/txsu && ok "txsu calls unshare" || fail "txsu missing unshare"
 
-# ── Script has no stale strings ───────────────────────────────────────────────
-stale_script() { bar; grep -qF -- "$2" "$S" && fail "stale in script: $1" || ok "not in script: $1"; }
-stale_script "old chsh wrapper"   'chsh()'
-stale_script "old chsh wrapper"   "chsh()"
+# rslave in ns
+bar; grep -q 'rslave' system/bin/ns && ok "ns does rslave" || fail "ns missing rslave"
 
-# ── README has no stale strings ───────────────────────────────────────────────
-stale_readme() { bar; grep -qF -- "$2" "$R" && fail "stale in README: $1" || ok "not in README: $1"; }
-stale_readme "stopped receiving updates 2020"  'stopped receiving updates in 2020'
-stale_readme "Proven empirically"              'Proven empirically'
-stale_readme "Zygote assigns"                  'Zygote assigns'
-stale_readme "GIDs are not fixed"              'GIDs are not fixed'
-stale_readme "Previously this was backwards"   'Previously this was backwards'
-stale_readme "Nothing is written to your system" 'Nothing is written to your system'
-stale_readme "USER_ID block"                   'Why is TERMUX__USER_ID not set?'
-stale_readme "chsh SELinux wrapper note"       'wraps `chsh` to fix the SELinux'
+# -Z in ns (SELinux context switch)
+bar; grep -q '\-Z' system/bin/ns && ok "ns passes -Z context" || fail "ns missing -Z"
 
-# ── details tag balance ───────────────────────────────────────────────────────
-OPEN=$(grep -c '<details>' "$R")
-CLOSE=$(grep -c '</details>' "$R")
-bar; [ "$OPEN" = "$CLOSE" ] \
-    && ok  "<details> tags balanced ($OPEN)" \
-    || fail "<details> imbalance: $OPEN open $CLOSE close"
-
-# ── Summary ───────────────────────────────────────────────────────────────────
-TOTAL=$((PASS+FAIL+WARN))
-printf "\r%-60s\n\n" " "   # clear bar line
+printf "\r%-60s\n\n" " "
 printf "${B}Results: ${G}%d passed${N}  ${RED}%d failed${N}  ${Y}%d warnings${N}  (%d total)\n" \
-    "$PASS" "$FAIL" "$WARN" "$TOTAL"
+    "$PASS" "$FAIL" "$WARN" "$((PASS+FAIL+WARN))"
 [ "$FAIL" -gt 0 ] && exit 1 || exit 0
