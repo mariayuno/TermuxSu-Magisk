@@ -5,7 +5,7 @@
 Reconstructs Android app runtime identity without a donor process: UID, GIDs, SELinux domain + MCS, mount namespace, full Termux userspace. Shell selection, `termux-exec`, and `termux-login.sh` are delegated to Termux's own `login` binary.
 
 <!-- VERSION_BADGE_START -->
-<img alt="Version" src="https://img.shields.io/badge/version-v2.5-7c3aed?style=for-the-badge&logo=github&logoColor=white">
+<img alt="Version" src="https://img.shields.io/badge/version-v2.6-7c3aed?style=for-the-badge&logo=github&logoColor=white">
 <!-- VERSION_BADGE_END -->
 
 ---
@@ -36,28 +36,28 @@ Reconstructs Android app runtime identity without a donor process: UID, GIDs, SE
 **KernelSU / ResuKiSU**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.5.zip && /data/adb/ksud module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.6.zip && /data/adb/ksud module install /tmp/txsu.zip
 ```
 
 **Magisk**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.5.zip && magisk --install-module /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.6.zip && magisk --install-module /tmp/txsu.zip
 ```
 
 **APatch**
 
 ```sh
-curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.5.zip && /data/adb/apd module install /tmp/txsu.zip
+curl -Lo /tmp/txsu.zip https://github.com/mariayuno/TermuxSu-Magisk/releases/latest/download/TermuxSu-v2.6.zip && /data/adb/apd module install /tmp/txsu.zip
 ```
 
 </td>
 <td valign="top" align="right" width="30%">
 
 <p align="right">
-<img alt="Version" src="https://img.shields.io/badge/v2.5-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
-<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-v2.5.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
-<img alt="Version Code" src="https://img.shields.io/badge/version%20code-16-0891b2?style=for-the-badge">
+<img alt="Version" src="https://img.shields.io/badge/v2.6-7c3aed?style=for-the-badge&logo=github&logoColor=white"><br>
+<img alt="Package" src="https://img.shields.io/badge/package-TermuxSu-v2.6.zip-2563eb?style=for-the-badge&logo=files&logoColor=white"><br>
+<img alt="Version Code" src="https://img.shields.io/badge/version%20code-17-0891b2?style=for-the-badge">
 </p>
 
 </td>

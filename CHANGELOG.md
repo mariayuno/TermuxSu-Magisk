@@ -1,3 +1,9 @@
+## v2.6
+
+- fix: copy ns+child from /system/bin to ~/.txsu at runtime; fix child MODE; full technical README (bc81d92)
+- chore: fix customize.sh (ns+child perms), README (CI markers + arch summary), check.sh (new arch), module.prop description (8d7bde5)
+- feat: donorless architecture rebuild (ns+child helpers, real SELinux context, mount namespace) (0823567)
+
 ## v2.5
 
 - chore: fix customize.sh (ns+child perms), README (CI markers + arch summary), check.sh (new arch), module.prop description (8d7bde5)
