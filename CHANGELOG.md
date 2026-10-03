@@ -1,3 +1,8 @@
+## v2.5
+
+- chore: fix customize.sh (ns+child perms), README (CI markers + arch summary), check.sh (new arch), module.prop description (8d7bde5)
+- feat: donorless architecture rebuild (ns+child helpers, real SELinux context, mount namespace) (0823567)
+
 ## v2.4
 
 - chore: trigger release for fish -l fix (47a41ee)
